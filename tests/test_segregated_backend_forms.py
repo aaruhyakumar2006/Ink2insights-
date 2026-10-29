@@ -14,13 +14,15 @@ from backend.app import create_app
 
 
 @pytest.fixture
-def temp_db():
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
+def temp_db(tmp_path):
+    path = str(tmp_path / "test_segregated.db")
     database.init_db(path)
     yield path
     if os.path.exists(path):
-        os.remove(path)
+        try:
+            os.remove(path)
+        except PermissionError:
+            pass
 
 
 @pytest.fixture
