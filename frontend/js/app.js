@@ -34,6 +34,35 @@ const state = {
   torchSupported: false
 };
 
+// Demo Mode & Secure Context Utilities
+export function isDemoMode() {
+  try {
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('demo') === '1') return true;
+  } catch (e) {}
+  if (window.SERVER_DEMO_MODE === true || window.SERVER_DEMO_MODE === '1') return true;
+  return false;
+}
+
+export function applyDemoModeUI() {
+  const isDemo = isDemoMode();
+  const demoBtn = $('login-demo-btn');
+  if (demoBtn) {
+    demoBtn.style.display = isDemo ? 'flex' : 'none';
+  }
+}
+
+export function checkSecureContext() {
+  const isSecure = (window.isSecureContext !== undefined)
+    ? window.isSecureContext
+    : (window.location.protocol === 'https:' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
+  const banner = $('insecure-context-banner');
+  if (banner) {
+    banner.style.display = (!isSecure) ? 'flex' : 'none';
+  }
+}
+
 // Initialize Camera Module
 let scanner = null;
 
@@ -353,6 +382,10 @@ export function logout() {
 }
 
 export function loginDemo() {
+  if (!isDemoMode()) {
+    toast('Demo Station is disabled. DEMO_MODE=1 or ?demo=1 required.');
+    return;
+  }
   state.doctorName = 'Dr. Priya (Demo)';
   localStorage.setItem('clinic_doctor_name', state.doctorName);
   localStorage.setItem('clinic_doctor_phone', '+91 98765 43210');
@@ -652,6 +685,10 @@ export async function renderHome() {
     // Update AI Indicator Chip & Telemetry Engine Badge
     const aiChip = $('ai-chip');
     if (statusRes) {
+      if (typeof statusRes.demo_mode === 'boolean') {
+        window.SERVER_DEMO_MODE = statusRes.demo_mode;
+        applyDemoModeUI();
+      }
       state.aiProvider = statusRes.ai_provider || 'Vision AI';
       const engineBadge = $('telemetry-engine-badge');
       if (engineBadge) {
@@ -1050,10 +1087,20 @@ export async function captureCurrentPage() {
     }
   }
 
-  // If no webcam frame, generate synthetic sheet image
+  // If no webcam frame, handle demo vs real camera path
   if (!captured) {
-    captured = await generatePageCanvasBlob(state.currentScanPage + 1);
-    sc.setPageImage(state.currentScanPage, captured.blob, captured.url, `page_${state.currentScanPage + 1}.jpg`);
+    if (isDemoMode()) {
+      captured = await generatePageCanvasBlob(state.currentScanPage + 1);
+      sc.setPageImage(state.currentScanPage, captured.blob, captured.url, `page_${state.currentScanPage + 1}.jpg`);
+    } else {
+      // Production path: camera inactive -> open file picker (camera-file-input) and show toast
+      const fileInput = $('camera-file-input');
+      if (fileInput) {
+        fileInput.click();
+      }
+      toast('Camera inactive. Please select or capture an image using your device camera.');
+      return;
+    }
   }
 
   const applyCapture = () => {
@@ -1133,6 +1180,10 @@ export async function onFileUploaded(event) {
 }
 
 export async function loadDemoSamples() {
+  if (!isDemoMode()) {
+    toast('Demo sheet generator is disabled outside DEMO_MODE');
+    return;
+  }
   const sc = getScannerInstance();
   toast('Synthesizing 2-page clinic intake form…');
   try {
@@ -1251,6 +1302,9 @@ function proceedToPairsScreen() {
 
 // Generate high quality canvas JPEG blob for demo testing
 function generatePageCanvasBlob(pageNumber) {
+  if (!isDemoMode()) {
+    throw new Error('Synthetic demo generator is disabled outside DEMO_MODE');
+  }
   return new Promise((resolve) => {
     const canvas = document.createElement('canvas');
     canvas.width = 1200;
@@ -3350,6 +3404,9 @@ window.app = {
   resetDemoData,
   toggleTheme,
   initTheme,
+  isDemoMode,
+  applyDemoModeUI,
+  checkSecureContext,
   finishSplash: () => window.finishSplash && window.finishSplash(),
   showOfflineQueueStatus,
 };
@@ -3357,6 +3414,8 @@ window.app = {
 // Initial App Boot Sequence
 function initApp() {
   initTheme();
+  checkSecureContext();
+  applyDemoModeUI();
   updateDoctorDisplays();
   renderHome();
   initPinBoxes();

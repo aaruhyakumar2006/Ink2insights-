@@ -200,10 +200,11 @@ def create_app(db_path: str = database.DEFAULT_DB_PATH) -> Flask:
             tables_exist = supabase_service.check_tables_exist()
             supabase_ready = bool(tables_exist.get("camps") and tables_exist.get("records"))
 
+        demo_mode = os.getenv("DEMO_MODE", "0").strip().lower() in ("1", "true", "yes")
         return jsonify({
-            "production_mode": True,
-            "demo_mode": False,
-            "mode_label": "PRODUCTION — Real Medical Intake Active",
+            "production_mode": not demo_mode,
+            "demo_mode": demo_mode,
+            "mode_label": "DEMO — Synthetic Demonstrations Active" if demo_mode else "PRODUCTION — Real Medical Intake Active",
             "ai_configured": ai.is_configured(),
             "ai_provider": ai.provider_name(),
             "supabase_configured": supabase_service.is_configured(),

@@ -84,6 +84,12 @@
 
   <div id="phone">
 
+    <!-- Insecure Context HTTPS Warning Banner -->
+    <div id="insecure-context-banner" style="display:none;background:#FEF2F2;border-bottom:2px solid #EF4444;color:#991B1B;padding:10px 14px;font-size:12.5px;font-weight:700;line-height:1.4;align-items:center;gap:8px;z-index:9999;" role="alert">
+      <span style="font-size:16px;">⚠️</span>
+      <span>Camera requires a secure HTTPS connection. Browsers block camera access on plain HTTP. Please access Doc Scanner over HTTPS.</span>
+    </div>
+
     <!-- 2. LANDING SCREEN — INK 2 INSIGHT CLINICAL INTAKE -->
     <section class="scr on" id="landing">
       <!-- Top Brand Navigation Bar -->
@@ -352,7 +358,7 @@
         </div>
 
         <!-- Quick Demo One-Click Sign In -->
-        <button type="button" class="btn ghost" style="margin-top:12px;border:1.5px dashed #D81B60;color:#D81B60;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:8px;background:#FFF0F5;" onclick="window.app.loginDemo()">
+        <button type="button" id="login-demo-btn" class="btn ghost demo-only-btn" style="margin-top:12px;border:1.5px dashed #D81B60;color:#D81B60;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:8px;background:#FFF0F5;" onclick="window.app.loginDemo()">
           <span>⚡ Demo 1-Click Access (Dr. Priya · Attending Physician)</span>
         </button>
 
@@ -652,7 +658,7 @@
 
       <!-- Quick Action Utilities -->
       <div class="scan-utils-bar">
-        <input type="file" id="camera-file-input" accept="image/*,.heic,.heif" style="display:none;" onchange="window.app.onFileUploaded(event)">
+        <input type="file" id="camera-file-input" accept="image/*" capture="environment" style="display:none;" onchange="window.app.onFileUploaded(event)">
         <button type="button" class="btn ghost" onclick="window.app.uploadPhoto()">
           <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
           Upload Form Photo
