@@ -3475,7 +3475,7 @@ function initApp() {
   api.getQualityConfig().then(cfg => {
     window.QUALITY_CONFIG = cfg;
   }).catch(() => {
-    window.QUALITY_CONFIG = { blur_min: 80.0, dark_max: 50.0, glare_max: 12.0 };
+    window.QUALITY_CONFIG = { blur_min: 200.0, dark_max: 50.0, glare_max: 12.0 };
   });
 
   updateDoctorDisplays();

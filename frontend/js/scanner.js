@@ -24,7 +24,7 @@ export async function assessImageQuality(imageOrCanvas) {
     let sourceHeight = 0;
     let sourceElement = imageOrCanvas;
 
-    if (imageOrCanvas instanceof Blob) {
+    if (typeof Blob !== 'undefined' && imageOrCanvas instanceof Blob) {
       try {
         sourceElement = await createImageBitmap(imageOrCanvas, { imageOrientation: 'from-image' });
         sourceWidth = sourceElement.width;
@@ -41,7 +41,7 @@ export async function assessImageQuality(imageOrCanvas) {
         sourceWidth = img.width;
         sourceHeight = img.height;
       }
-    } else if (imageOrCanvas instanceof HTMLVideoElement) {
+    } else if (typeof HTMLVideoElement !== 'undefined' && imageOrCanvas instanceof HTMLVideoElement) {
       sourceWidth = imageOrCanvas.videoWidth || 1280;
       sourceHeight = imageOrCanvas.videoHeight || 720;
     } else {
@@ -149,8 +149,8 @@ export async function assessImageQuality(imageOrCanvas) {
     }
 
     // Config thresholds from window.QUALITY_CONFIG with defaults
-    const cfg = window.QUALITY_CONFIG || { blur_min: 80.0, dark_max: 50.0, glare_max: 12.0 };
-    const blurMin = typeof cfg.blur_min === 'number' ? cfg.blur_min : 80.0;
+    const cfg = (typeof window !== 'undefined' && window.QUALITY_CONFIG) ? window.QUALITY_CONFIG : { blur_min: 200.0, dark_max: 50.0, glare_max: 12.0 };
+    const blurMin = typeof cfg.blur_min === 'number' ? cfg.blur_min : 200.0;
     const darkMax = typeof cfg.dark_max === 'number' ? cfg.dark_max : 50.0;
     const glareMax = typeof cfg.glare_max === 'number' ? cfg.glare_max : 12.0;
 

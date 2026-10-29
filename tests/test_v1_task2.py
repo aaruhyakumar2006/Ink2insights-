@@ -73,7 +73,7 @@ def test_assess_image_quality_sharp_document():
     img_bytes = _image_to_bytes(img)
     res = assess_image_quality(img_bytes)
     assert res["ok"] is True
-    assert res["blur_score"] > 80.0
+    assert res["blur_score"] > 200.0
     assert 50.0 <= res["brightness"] <= 250.0
     assert res["glare_pct"] < 12.0
     assert len(res["issues"]) == 0
@@ -85,7 +85,7 @@ def test_assess_image_quality_blurred():
     res = assess_image_quality(_image_to_bytes(blurred_img))
     assert res["ok"] is False
     assert any("Blurry" in issue for issue in res["issues"])
-    assert res["blur_score"] < 80.0
+    assert res["blur_score"] < 200.0
 
 
 def test_assess_image_quality_dark():
@@ -272,84 +272,35 @@ def test_client_and_server_quality_formula_parity(tmp_path):
     with open(raw_file, "wb") as f:
         f.write(raw_bytes)
 
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    scanner_js_path = os.path.join(repo_root, "frontend", "js", "scanner.js").replace("\\", "/")
+
+    # Directly import and execute the real assessImageQuality from frontend/js/scanner.js
     node_script = f"""
-    const fs = require('fs');
-    const rawData = fs.readFileSync('{raw_file}');
+    import fs from 'fs';
+    const rawBuffer = fs.readFileSync('{raw_file}');
+    const rawData = new Uint8ClampedArray(rawBuffer.buffer, rawBuffer.byteOffset, rawBuffer.byteLength);
     const newW = {w};
     const newH = {h};
-    const totalPixels = newW * newH;
 
-    const gray = new Float32Array(totalPixels);
-    let lumSum = 0;
-    let glareCount = 0;
+    const mockCanvas = {{
+      width: newW,
+      height: newH,
+      getContext: () => ({{
+        drawImage: () => {{}},
+        getImageData: (x, y, w, h) => ({{ data: rawData }})
+      }})
+    }};
+    global.document = {{
+      createElement: () => mockCanvas
+    }};
 
-    for (let i = 0, j = 0; i < rawData.length; i += 4, j++) {{
-      const r = rawData[i];
-      const g = rawData[i + 1];
-      const b = rawData[i + 2];
-      const y = 0.299 * r + 0.587 * g + 0.114 * b;
-      gray[j] = y;
-      lumSum += y;
-      if (r >= 250 && g >= 250 && b >= 250) {{
-        glareCount++;
-      }}
-    }}
-
-    const brightness = lumSum / totalPixels;
-    const glarePct = (glareCount / totalPixels) * 100.0;
-
-    const gridDim = 8;
-    const tileW = Math.max(2, Math.floor(newW / gridDim));
-    const tileH = Math.max(2, Math.floor(newH / gridDim));
-    const tileVars = [];
-
-    for (let tr = 0; tr < gridDim; tr++) {{
-      const rStart = Math.max(1, tr * tileH);
-      const rEnd = (tr === gridDim - 1) ? newH - 1 : (tr + 1) * tileH;
-      for (let tc = 0; tc < gridDim; tc++) {{
-        const cStart = Math.max(1, tc * tileW);
-        const cEnd = (tc === gridDim - 1) ? newW - 1 : (tc + 1) * tileW;
-
-        let lapSum = 0;
-        let lapSqSum = 0;
-        let count = 0;
-
-        for (let r = rStart; r < rEnd; r++) {{
-          const rowOffset = r * newW;
-          const upOffset = (r - 1) * newW;
-          const downOffset = (r + 1) * newW;
-
-          for (let c = cStart; c < cEnd; c++) {{
-            const val = gray[upOffset + c] + gray[downOffset + c] + gray[rowOffset + c - 1] + gray[rowOffset + c + 1] - 4 * gray[rowOffset + c];
-            lapSum += val;
-            lapSqSum += val * val;
-            count++;
-          }}
-        }}
-
-        if (count > 4) {{
-          const mean = lapSum / count;
-          const variance = (lapSqSum / count) - (mean * mean);
-          tileVars.push(variance);
-        }}
-      }}
-    }}
-
-    tileVars.sort((a, b) => a - b);
-    let blurScore = 0;
-    if (tileVars.length > 0) {{
-      const pIndex = Math.min(tileVars.length - 1, Math.floor(tileVars.length * 0.85));
-      blurScore = tileVars[pIndex];
-    }}
-
-    console.log(JSON.stringify({{
-      blur_score: Math.round(blurScore * 100) / 100,
-      brightness: Math.round(brightness * 100) / 100,
-      glare_pct: Math.round(glarePct * 100) / 100
-    }}));
+    import * as scanner from 'file:///{scanner_js_path}';
+    const js_res = await scanner.assessImageQuality(mockCanvas);
+    console.log(JSON.stringify(js_res));
     """
-    proc = subprocess.run(["node", "-e", node_script], capture_output=True, text=True)
-    assert proc.returncode == 0
+    proc = subprocess.run(["node", "--input-type=module", "-e", node_script], capture_output=True, text=True)
+    assert proc.returncode == 0, f"Node error: {proc.stderr}"
     js_res = json.loads(proc.stdout.strip())
 
     # Python and JS must match closely (< 2% difference due to float precision)
@@ -398,3 +349,140 @@ def test_calibration_tool_on_real_camp_fixtures():
     assert far == 0.0
     # Every real sharp form scores > 800 while blurred forms score < 40
     assert min(sharp_scores) > max(blur_scores)
+
+
+def test_database_migration_safe_on_existing_pre_migration_database(tmp_path):
+    """Rule 4 Safe Migration: Verify init_db on a pre-migration database preserves all existing data and adds quality_bypassed."""
+    import sqlite3
+
+    old_db = str(tmp_path / "old_pre_migration.db")
+    conn = sqlite3.connect(old_db)
+    cur = conn.cursor()
+
+    # Create pre-migration camps table
+    cur.execute("""
+        CREATE TABLE camps (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            date_str TEXT NOT NULL,
+            expected_records INTEGER NOT NULL DEFAULT 100,
+            location TEXT DEFAULT 'Chennai Health Camp',
+            created_by TEXT,
+            target_group TEXT NOT NULL DEFAULT 'adult',
+            created_at TEXT NOT NULL,
+            updated_at TEXT
+        );
+    """)
+    cur.execute("INSERT INTO camps VALUES ('camp_old_1', 'Old Camp', '2026-10-01', 50, 'Chennai', 'doc_1', 'adult', '2026-10-01T10:00:00', NULL);")
+
+    # Create pre-migration records table (WITHOUT quality_bypassed column)
+    cur.execute("""
+        CREATE TABLE records (
+            id TEXT PRIMARY KEY,
+            camp_id TEXT NOT NULL,
+            person_name TEXT NOT NULL,
+            age TEXT,
+            gender TEXT,
+            height TEXT,
+            weight TEXT,
+            blood_pressure TEXT,
+            examination_details TEXT,
+            referral_details TEXT,
+            missing_fields TEXT NOT NULL DEFAULT '[]',
+            uncertain_fields TEXT NOT NULL DEFAULT '[]',
+            extraction_notes TEXT,
+            structured_record TEXT,
+            status TEXT NOT NULL DEFAULT 'needs_review',
+            page1_preview TEXT,
+            page2_preview TEXT,
+            reviewer_notes TEXT,
+            reviewed_by TEXT,
+            reviewed_at TEXT,
+            scanned_by TEXT,
+            community_id TEXT,
+            target_group TEXT NOT NULL DEFAULT 'adult',
+            is_paediatric INTEGER DEFAULT 0,
+            paediatric_alerts TEXT DEFAULT '[]',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+    """)
+    cur.execute("""
+        INSERT INTO records (id, camp_id, person_name, age, status, created_at, updated_at)
+        VALUES ('rec_old_001', 'camp_old_1', 'Kavitha R', '34', 'reviewed', '2026-10-01T10:30:00', '2026-10-01T10:30:00');
+    """)
+    conn.commit()
+    conn.close()
+
+    # Run safe migration via database.init_db
+    database.init_db(old_db)
+
+    # Verify old record is 100% intact
+    rec_after = database.get_record_by_id("rec_old_001", db_path=old_db)
+    assert rec_after is not None
+    assert rec_after["person_name"] == "Kavitha R"
+    assert rec_after["age"] == "34"
+    assert rec_after["status"] == "reviewed"
+    # Column exists and defaults to False
+    assert rec_after["quality_bypassed"] is False
+
+    # Insert a new record with quality_bypassed=True into the migrated DB
+    new_rec = database.insert_record({
+        "id": "rec_new_migrated_002",
+        "camp_id": "camp_old_1",
+        "person_name": "Suresh M",
+        "age": "45",
+        "quality_bypassed": True,
+        "status": "needs_review"
+    }, db_path=old_db)
+    assert new_rec["quality_bypassed"] is True
+
+
+def test_ok_null_on_uncheckable_photo_does_not_block_extract_with_422(test_client_and_db, monkeypatch):
+    """When photo clarity cannot be checked (ok: None), extract does NOT return 422, allowing workflow to proceed."""
+    client, db_path = test_client_and_db
+
+    camp_res = client.post("/api/camps", json={"name": "Test Camp Uncheckable"})
+    camp_id = camp_res.get_json()["id"]
+
+    def mock_extract(*args, **kwargs):
+        return {
+            "success": True,
+            "data": {
+                "student_name": "Pooja V",
+                "camp_id": camp_id
+            },
+            "status": "success",
+            "tier": "tier1"
+        }
+
+    monkeypatch.setattr("backend.app.ai_extract", mock_extract)
+
+    # Mock assess_image_quality to return ok: None (soft warning)
+    def mock_assess(img_bytes, *args, **kwargs):
+        return {
+            "ok": None,
+            "blur_score": 0.0,
+            "brightness": 0.0,
+            "glare_pct": 0.0,
+            "issues": ["Could not check this photo, retake if unsure"]
+        }
+
+    monkeypatch.setattr("backend.services.quality_service.assess_image_quality", mock_assess)
+
+    sharp_img = _create_synthetic_document()
+    img_bytes = _image_to_bytes(sharp_img)
+
+    data = {
+        "student_form": (io.BytesIO(img_bytes), "sf.jpg"),
+        "health_assessment": (io.BytesIO(img_bytes), "ha.jpg"),
+        "org_id": "org_default",
+        "camp_id": camp_id,
+    }
+    # Call without bypass flag - must NOT be blocked with 422!
+    res = client.post("/api/extract", data=data, content_type="multipart/form-data")
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["success"] is True
+    assert body["quality"]["ok"] is True  # server treated non-failure as allowed
+
