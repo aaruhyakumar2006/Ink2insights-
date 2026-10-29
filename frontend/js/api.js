@@ -59,6 +59,19 @@ export const api = {
     return request('/api/status');
   },
 
+  async getQualityConfig() {
+    return request('/api/config/quality');
+  },
+
+  async checkQuality(imageBlob) {
+    const formData = new FormData();
+    formData.append('image', imageBlob);
+    return request('/api/quality-check', {
+      method: 'POST',
+      body: formData
+    });
+  },
+
   async getStats() {
     return request('/api/stats');
   },
@@ -119,7 +132,7 @@ export const api = {
     return request(`/api/records/${encodeURIComponent(recordId)}`);
   },
 
-  async extractPages(page1Blob, page2Blob, campId = null) {
+  async extractPages(page1Blob, page2Blob, campId = null, qualityBypassed = false) {
     // ── Offline path: encrypt + enqueue ────────────────────────────────────
     if (!navigator.onLine) {
       const apiHeaders = {};
@@ -129,6 +142,7 @@ export const api = {
       if (customProvider) apiHeaders['X-AI-Provider'] = customProvider.trim();
       const customModel = localStorage.getItem('i2i_ai_model');
       if (customModel) apiHeaders['X-AI-Model'] = customModel.trim();
+      if (qualityBypassed) apiHeaders['X-Quality-Bypassed'] = '1';
 
       const id = await offlineQueue.enqueue(page1Blob, page2Blob, { campId, apiHeaders });
       const queueLength = await offlineQueue.length();
@@ -145,10 +159,13 @@ export const api = {
     const formData = new FormData();
     formData.append('page1', page1Blob, 'page1.jpg');
     formData.append('page2', page2Blob, 'page2.jpg');
+    if (campId) formData.append('camp_id', campId);
+    if (qualityBypassed) formData.append('quality_bypassed', '1');
 
     return request('/api/extract', {
       method: 'POST',
-      body: formData
+      body: formData,
+      headers: qualityBypassed ? { 'X-Quality-Bypassed': '1' } : {}
     });
   },
 

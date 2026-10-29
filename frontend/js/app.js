@@ -954,11 +954,15 @@ export function showQualityAlertModal(quality, onProceed, onRetake) {
   const torchBtn = $('quality-torch-btn');
 
   if (msgEl) {
-    const issues = quality.issues && quality.issues.length ? quality.issues.join(' and ') : 'Low clarity detected';
-    msgEl.textContent = `Warning: ${issues}. Text or vitals on the paper document may be unreadable for Vision AI.`;
+    if (quality.ok === null) {
+      msgEl.textContent = 'Warning: Could not check this photo clarity. Retake if unsure.';
+    } else {
+      const issues = quality.issues && quality.issues.length ? quality.issues.join(' and ') : 'Low clarity detected';
+      msgEl.textContent = `Warning: ${issues}. Text or vitals on the paper document may be unreadable for Vision AI.`;
+    }
   }
-  if (lumEl) lumEl.textContent = quality.avgLum !== undefined ? `${quality.avgLum} / 255` : 'N/A';
-  if (sharpEl) sharpEl.textContent = quality.blurScore !== undefined ? `${quality.blurScore}` : 'N/A';
+  if (lumEl) lumEl.textContent = (quality.brightness !== undefined ? `${quality.brightness}` : (quality.avgLum !== undefined ? `${quality.avgLum}` : 'N/A')) + ' / 255';
+  if (sharpEl) sharpEl.textContent = quality.blur_score !== undefined ? `${quality.blur_score}` : (quality.blurScore !== undefined ? `${quality.blurScore}` : 'N/A');
 
   const sc = getScannerInstance();
   if (torchBtn) {
@@ -1441,7 +1445,7 @@ export async function saveAndExtract() {
 
   try {
     toast('Transcribing document pages with Vision AI…');
-    const extractRes = await api.extractPages(p1, p2, campId);
+    const extractRes = await api.extractPages(p1, p2, campId, state.qualityBypassed);
 
     // ── Offline Queue sentinel: scan was encrypted + queued ──────────────
     if (extractRes && extractRes._offline_queued) {
@@ -1485,6 +1489,7 @@ export async function saveAndExtract() {
       status: 'needs_review',
       page1_preview: page1Url,
       page2_preview: page2Url,
+      quality_bypassed: Boolean(state.qualityBypassed || (ext && ext.quality_bypassed)),
       quality_warning_bypassed: (state.qualityWarningsBypassed && state.qualityWarningsBypassed.length > 0) ? state.qualityWarningsBypassed : []
     };
 
@@ -1496,6 +1501,28 @@ export async function saveAndExtract() {
 
   } catch (ex) {
     console.error('Extraction error:', ex);
+
+    // Server-side quality rejection (HTTP 422 unreadable) -> show quality alert modal
+    if (ex.status === 422 && ex.data && ex.data.error === 'unreadable') {
+      const q = ex.data.quality || { ok: false, issues: [ex.data.message || 'Image unreadable'] };
+      showQualityAlertModal(
+        q,
+        // On "Use anyway": bypass server check and retry extraction
+        () => {
+          state.qualityBypassed = true;
+          extractDocumentPages();
+        },
+        // On "Retake": go back to scanner and clear pages
+        () => {
+          const sc = getScannerInstance();
+          if (sc) sc.resetAllPages();
+          startScan();
+          toast('Photo rejected for clarity. Please position camera steadily and retake.');
+        }
+      );
+      return;
+    }
+
     // Fallback: create record with manual entry so workflow is never blocked
     try {
       const fallbackPayload = {
@@ -3416,6 +3443,14 @@ function initApp() {
   initTheme();
   checkSecureContext();
   applyDemoModeUI();
+
+  // Load server quality configuration
+  api.getQualityConfig().then(cfg => {
+    window.QUALITY_CONFIG = cfg;
+  }).catch(() => {
+    window.QUALITY_CONFIG = { blur_min: 80.0, dark_max: 50.0, glare_max: 12.0 };
+  });
+
   updateDoctorDisplays();
   renderHome();
   initPinBoxes();

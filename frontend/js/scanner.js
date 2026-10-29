@@ -4,6 +4,171 @@
  * device image upload, validation, and retake/replace management.
  */
 
+/**
+ * One reliable quality check used by both camera and upload paths.
+ * 1. Corrects EXIF rotation
+ * 2. Scales fixed copy with long edge = 640 px
+ * 3. Measures sharpness as Laplacian variance over 8x8 grid tiles (75th percentile)
+ * 4. Measures mean brightness (0-255)
+ * 5. Measures glare (% of near-white saturated pixels > 250)
+ * Thresholds come from window.QUALITY_CONFIG, with defaults.
+ * Never fails silently: returns ok: null on failure.
+ */
+export async function assessImageQuality(imageOrCanvas) {
+  try {
+    if (!imageOrCanvas) {
+      return { ok: null, blur_score: 0, brightness: 0, glare_pct: 0, issues: ['Could not check this photo, retake if unsure'] };
+    }
+
+    let sourceWidth = 0;
+    let sourceHeight = 0;
+    let sourceElement = imageOrCanvas;
+
+    if (imageOrCanvas instanceof Blob) {
+      try {
+        sourceElement = await createImageBitmap(imageOrCanvas, { imageOrientation: 'from-image' });
+        sourceWidth = sourceElement.width;
+        sourceHeight = sourceElement.height;
+      } catch (e) {
+        const img = new Image();
+        const url = URL.createObjectURL(imageOrCanvas);
+        await new Promise((res, rej) => {
+          img.onload = () => { URL.revokeObjectURL(url); res(); };
+          img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('Failed to load image blob')); };
+          img.src = url;
+        });
+        sourceElement = img;
+        sourceWidth = img.width;
+        sourceHeight = img.height;
+      }
+    } else if (imageOrCanvas instanceof HTMLVideoElement) {
+      sourceWidth = imageOrCanvas.videoWidth || 1280;
+      sourceHeight = imageOrCanvas.videoHeight || 720;
+    } else {
+      sourceWidth = imageOrCanvas.width || 640;
+      sourceHeight = imageOrCanvas.height || 480;
+    }
+
+    if (sourceWidth < 4 || sourceHeight < 4) {
+      return { ok: null, blur_score: 0, brightness: 0, glare_pct: 0, issues: ['Could not check this photo, retake if unsure'] };
+    }
+
+    // Scale to fixed copy with long edge = 640 px
+    let newW, newH;
+    if (sourceWidth >= sourceHeight) {
+      newW = 640;
+      newH = Math.max(1, Math.round((640 * sourceHeight) / sourceWidth));
+    } else {
+      newH = 640;
+      newW = Math.max(1, Math.round((640 * sourceWidth) / sourceHeight));
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = newW;
+    canvas.height = newH;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) {
+      return { ok: null, blur_score: 0, brightness: 0, glare_pct: 0, issues: ['Could not check this photo, retake if unsure'] };
+    }
+
+    ctx.drawImage(sourceElement, 0, 0, newW, newH);
+    const imgData = ctx.getImageData(0, 0, newW, newH);
+    const data = imgData.data;
+    const totalPixels = newW * newH;
+
+    // Grayscale luminance array & Brightness & Glare
+    const gray = new Float32Array(totalPixels);
+    let lumSum = 0;
+    let glareCount = 0;
+
+    for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+      const y = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      gray[j] = y;
+      lumSum += y;
+      if (y > 250) glareCount++;
+    }
+
+    const brightness = lumSum / totalPixels;
+    const glarePct = (glareCount / totalPixels) * 100.0;
+
+    // Sharpness: 8x8 Grid Tile Laplacian Variance (using high 75th percentile)
+    const gridDim = 8;
+    const tileW = Math.max(2, Math.floor(newW / gridDim));
+    const tileH = Math.max(2, Math.floor(newH / gridDim));
+    const tileVars = [];
+
+    for (let tr = 0; tr < gridDim; tr++) {
+      const rStart = Math.max(1, tr * tileH);
+      const rEnd = (tr === gridDim - 1) ? newH - 1 : (tr + 1) * tileH;
+      for (let tc = 0; tc < gridDim; tc++) {
+        const cStart = Math.max(1, tc * tileW);
+        const cEnd = (tc === gridDim - 1) ? newW - 1 : (tc + 1) * tileW;
+
+        let lapSum = 0;
+        let lapSqSum = 0;
+        let count = 0;
+
+        for (let r = rStart; r < rEnd; r++) {
+          const rowOffset = r * newW;
+          const upOffset = (r - 1) * newW;
+          const downOffset = (r + 1) * newW;
+
+          for (let c = cStart; c < cEnd; c++) {
+            const val = gray[upOffset + c] + gray[downOffset + c] + gray[rowOffset + c - 1] + gray[rowOffset + c + 1] - 4 * gray[rowOffset + c];
+            lapSum += val;
+            lapSqSum += val * val;
+            count++;
+          }
+        }
+
+        if (count > 4) {
+          const mean = lapSum / count;
+          const variance = (lapSqSum / count) - (mean * mean);
+          tileVars.push(variance);
+        }
+      }
+    }
+
+    // 75th percentile of tile variances
+    tileVars.sort((a, b) => a - b);
+    let blurScore = 0;
+    if (tileVars.length > 0) {
+      const pIndex = Math.min(tileVars.length - 1, Math.floor(tileVars.length * 0.75));
+      blurScore = tileVars[pIndex];
+    }
+
+    // Config thresholds from window.QUALITY_CONFIG with defaults
+    const cfg = window.QUALITY_CONFIG || { blur_min: 80.0, dark_max: 50.0, glare_max: 12.0 };
+    const blurMin = typeof cfg.blur_min === 'number' ? cfg.blur_min : 80.0;
+    const darkMax = typeof cfg.dark_max === 'number' ? cfg.dark_max : 50.0;
+    const glareMax = typeof cfg.glare_max === 'number' ? cfg.glare_max : 12.0;
+
+    const issues = [];
+    if (brightness < darkMax) issues.push('Too dark / underexposed');
+    if (glarePct > glareMax) issues.push('Severe glare detected');
+    if (blurScore < blurMin) issues.push('Blurry document');
+
+    return {
+      ok: issues.length === 0,
+      blur_score: Math.round(blurScore * 10) / 10,
+      brightness: Math.round(brightness * 10) / 10,
+      glare_pct: Math.round(glarePct * 10) / 10,
+      avgLum: Math.round(brightness),
+      blurScore: Math.round(blurScore * 10) / 10,
+      issues
+    };
+  } catch (err) {
+    console.warn('Image quality assessment error:', err);
+    return {
+      ok: null,
+      blur_score: 0,
+      brightness: 0,
+      glare_pct: 0,
+      issues: ['Could not check this photo, retake if unsure']
+    };
+  }
+}
+
 export class DocumentScanner {
   constructor(options = {}) {
     this.videoEl = options.videoEl;
@@ -44,98 +209,8 @@ export class DocumentScanner {
     }
   }
 
-  checkImageQuality(canvas) {
-    if (!canvas) return { ok: true, isLowLight: false, isOverexposed: false, isBlurry: false, score: 100 };
-    try {
-      const ctx = canvas.getContext('2d');
-      const w = canvas.width;
-      const h = canvas.height;
-      if (w < 10 || h < 10) return { ok: true, isLowLight: false, isOverexposed: false, isBlurry: false, score: 100 };
-      
-      const imgData = ctx.getImageData(0, 0, w, h);
-      const data = imgData.data;
-      
-      let sumLum = 0;
-      let sumGrad = 0;
-      let count = 0;
-      const step = Math.max(1, Math.floor(Math.min(w, h) / 120)); // fast subsample
-
-      // Fast luminance & gradient pass
-      for (let y = 1; y < h - 1; y += step) {
-        for (let x = 1; x < w - 1; x += step) {
-          const idx = (y * w + x) * 4;
-          const center = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-          const right = 0.299 * data[idx + 4] + 0.587 * data[idx + 5] + 0.114 * data[idx + 6];
-          const down = 0.299 * data[idx + w * 4] + 0.587 * data[idx + w * 4 + 1] + 0.114 * data[idx + w * 4 + 2];
-          
-          sumLum += center;
-          sumGrad += Math.abs(center - right) + Math.abs(center - down);
-          count++;
-        }
-      }
-
-      if (count === 0) return { ok: true, isLowLight: false, isOverexposed: false, isBlurry: false, score: 100 };
-
-      const avgLum = sumLum / count;
-      const blurScore = sumGrad / count;
-
-      // Center 256x256 Laplacian Edge Variance
-      const winW = Math.min(256, w - 2);
-      const winH = Math.min(256, h - 2);
-      const startX = Math.max(1, Math.floor((w - winW) / 2));
-      const startY = Math.max(1, Math.floor((h - winH) / 2));
-
-      const lapVals = [];
-      let lapSum = 0;
-      for (let y = startY; y < startY + winH; y += 2) {
-        for (let x = startX; x < startX + winW; x += 2) {
-          const idx = (y * w + x) * 4;
-          const c = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-          const up = 0.299 * data[((y - 1) * w + x) * 4] + 0.587 * data[((y - 1) * w + x) * 4 + 1] + 0.114 * data[((y - 1) * w + x) * 4 + 2];
-          const dn = 0.299 * data[((y + 1) * w + x) * 4] + 0.587 * data[((y + 1) * w + x) * 4 + 1] + 0.114 * data[((y + 1) * w + x) * 4 + 2];
-          const lf = 0.299 * data[(y * w + (x - 1)) * 4] + 0.587 * data[(y * w + (x - 1)) * 4 + 1] + 0.114 * data[(y * w + (x - 1)) * 4 + 2];
-          const rt = 0.299 * data[(y * w + (x + 1)) * 4] + 0.587 * data[(y * w + (x + 1)) * 4 + 1] + 0.114 * data[(y * w + (x + 1)) * 4 + 2];
-          const lap = Math.abs(up + dn + lf + rt - 4 * c);
-          lapVals.push(lap);
-          lapSum += lap;
-        }
-      }
-
-      let lapVar = 0;
-      if (lapVals.length > 0) {
-        const lapMean = lapSum / lapVals.length;
-        let sqDiffSum = 0;
-        for (let i = 0; i < lapVals.length; i++) {
-          sqDiffSum += (lapVals[i] - lapMean) * (lapVals[i] - lapMean);
-        }
-        lapVar = sqDiffSum / lapVals.length;
-      }
-
-      // Thresholds: low light < 50, overexposed > 230, blur variance < 14 or gradient < 8.5
-      const isLowLight = avgLum < 50;
-      const isOverexposed = avgLum > 230;
-      const isBlurry = lapVar < 14.0 || blurScore < 8.5;
-
-      const issues = [];
-      if (isLowLight) issues.push('Low lighting / underexposed');
-      if (isOverexposed) issues.push('Severe glare / overexposed');
-      if (isBlurry) issues.push('Blurry / motion-blurred document');
-
-      return {
-        ok: !isLowLight && !isOverexposed && !isBlurry,
-        isLowLight,
-        isOverexposed,
-        isBlurry,
-        avgLum: Math.round(avgLum),
-        blurScore: Math.round(blurScore * 10) / 10,
-        laplacianVariance: Math.round(lapVar * 10) / 10,
-        issues,
-        message: issues.join(' and ')
-      };
-    } catch (err) {
-      console.warn('Image quality check failed:', err);
-      return { ok: true, isLowLight: false, isOverexposed: false, isBlurry: false, score: 100 };
-    }
+  async checkImageQuality(canvasOrImg) {
+    return assessImageQuality(canvasOrImg);
   }
 
   async startCamera() {
@@ -210,8 +285,8 @@ export class DocumentScanner {
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, width, height);
 
-    // Pre-flight image quality check
-    const quality = this.checkImageQuality(canvas);
+    // One reliable pre-flight image quality check
+    const quality = await assessImageQuality(canvas);
 
     return new Promise((resolve, reject) => {
       canvas.toBlob(blob => {
@@ -244,14 +319,19 @@ export class DocumentScanner {
     }
 
     try {
-      const { optimizedBlob, quality } = await this._resizeAndAnalyzeImage(file, 1600);
-      const url = URL.createObjectURL(optimizedBlob);
-      this.setPageImage(this.currentPage, optimizedBlob, url, file.name);
-      return { blob: optimizedBlob, url, quality };
-    } catch {
+      // Use the exact same assessImageQuality check for uploaded images
+      const quality = await assessImageQuality(file);
       const url = URL.createObjectURL(file);
       this.setPageImage(this.currentPage, file, url, file.name);
-      return { blob: file, url, quality: { ok: true, isLowLight: false, isOverexposed: false, isBlurry: false } };
+      return { blob: file, url, quality };
+    } catch (err) {
+      const url = URL.createObjectURL(file);
+      this.setPageImage(this.currentPage, file, url, file.name);
+      return {
+        blob: file,
+        url,
+        quality: { ok: null, blur_score: 0, brightness: 0, glare_pct: 0, issues: ['Could not check this photo, retake if unsure'] }
+      };
     }
   }
 

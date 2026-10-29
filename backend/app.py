@@ -219,6 +219,24 @@ def create_app(db_path: str = database.DEFAULT_DB_PATH) -> Flask:
     def stats():
         return jsonify(database.get_overall_stats(db_path))
 
+    @app.route("/api/config/quality", methods=["GET"])
+    def get_quality_config_route():
+        from backend.services.quality_service import get_quality_config
+        return jsonify(get_quality_config())
+
+    @app.route("/api/quality-check", methods=["POST"])
+    def quality_check_route():
+        from backend.services.quality_service import assess_image_quality
+        file = request.files.get("image") or request.files.get("file")
+        if file:
+            res = assess_image_quality(file.read())
+            return jsonify(res)
+        raw_data = request.get_data()
+        if raw_data:
+            res = assess_image_quality(raw_data)
+            return jsonify(res)
+        return jsonify({"ok": None, "error": "No image provided", "issues": ["No image file provided"]}), 400
+
     # --- Camps API ---
     @app.route("/api/camps", methods=["GET"])
     def list_camps():
@@ -978,6 +996,62 @@ def create_app(db_path: str = database.DEFAULT_DB_PATH) -> Flask:
             or request.args.get("model")
         )
 
+        # Emergency AI Kill Switch Check (Fail fast before image analysis or reservations)
+        try:
+            with database.get_db_connection(db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT ai_paused FROM orgs WHERE id = ?;", (org_id,))
+                org_row = cursor.fetchone()
+                if org_row and org_row["ai_paused"]:
+                    return jsonify({
+                        "success": False,
+                        "error": "AI processing is currently paused by administrator kill switch.",
+                        "code": "AI_PAUSED"
+                    }), 403
+        except Exception:
+            pass
+
+        # Task 2: Server-side Quality Pre-flight Check
+        from backend.services.quality_service import assess_image_quality
+        q1 = assess_image_quality(sf_bytes)
+        q2 = assess_image_quality(ha_bytes)
+        quality_ok = bool((q1.get("ok") is not False) and (q2.get("ok") is not False))
+        combined_issues = []
+        if q1.get("ok") is False and q1.get("issues"):
+            combined_issues.extend([f"Page 1: {iss}" for iss in q1["issues"]])
+        if q2.get("ok") is False and q2.get("issues"):
+            combined_issues.extend([f"Page 2: {iss}" for iss in q2["issues"]])
+
+        quality_bypassed = (
+            request.headers.get("X-Quality-Bypassed", "").strip().lower() in ("1", "true")
+            or request.form.get("quality_bypassed", "").strip().lower() in ("1", "true")
+            or request.args.get("quality_bypassed", "").strip().lower() in ("1", "true")
+        )
+
+        quality_summary = {
+            "page1": q1,
+            "page2": q2,
+            "blur_score": min(q1.get("blur_score", 0), q2.get("blur_score", 0)),
+            "brightness": round((q1.get("brightness", 0) + q2.get("brightness", 0)) / 2.0, 2),
+            "glare_pct": max(q1.get("glare_pct", 0), q2.get("glare_pct", 0)),
+            "ok": quality_ok,
+            "issues": combined_issues
+        }
+
+        if not quality_ok and not quality_bypassed:
+            if record_id:
+                try:
+                    database.release_paper(org_id=org_id, record_id=record_id, db_path=db_path)
+                except Exception:
+                    pass
+            return jsonify({
+                "success": False,
+                "error": "unreadable",
+                "message": f"Image quality check failed. Please retake the photo. Issues: {', '.join(combined_issues)}",
+                "quality": quality_summary,
+                "code": "IMAGE_UNREADABLE"
+            }), 422
+
         result = ai_extract(
             student_form_bytes=sf_bytes,
             health_assessment_bytes=ha_bytes,
@@ -989,6 +1063,13 @@ def create_app(db_path: str = database.DEFAULT_DB_PATH) -> Flask:
             provider=dynamic_provider,
             model=dynamic_model
         )
+
+        # Inject quality metrics and bypass flag
+        result["quality"] = quality_summary
+        result["quality_bypassed"] = quality_bypassed
+        if isinstance(result.get("data"), dict):
+            result["data"]["quality"] = quality_summary
+            result["data"]["quality_bypassed"] = quality_bypassed
 
         # Inject permanent URLs so client saves durable image links in database
         result["page1_url"] = page1_permanent_url
