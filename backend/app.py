@@ -755,12 +755,27 @@ def create_app(db_path: str = database.DEFAULT_DB_PATH) -> Flask:
         phone = (data.get("phone") or "").strip()
         if not phone:
             return jsonify({"error": "Phone number is required."}), 400
-        # In clinic camp field deployment, issue 6-digit OTP (demo OTP: 123456)
-        logger.info("Clinical verification code requested for %s", phone)
+        
+        demo_mode_active = os.getenv("DEMO_MODE", "0").lower() in ("1", "true")
+        logger.info("Clinical verification code requested for %s (demo_mode=%s)", phone, demo_mode_active)
+        resp = {
+            "success": True,
+            "message": f"Clinical verification code sent to {phone}"
+        }
+        if demo_mode_active:
+            resp["demo_otp"] = "123456"
+        return jsonify(resp)
+
+    @app.route("/api/auth/demo", methods=["POST"])
+    def auth_demo():
+        demo_mode_active = os.getenv("DEMO_MODE", "0").lower() in ("1", "true")
+        if not demo_mode_active:
+            return jsonify({"error": "Demo login is disabled in production. DEMO_MODE=1 required."}), 403
         return jsonify({
             "success": True,
-            "message": f"Clinical verification code sent to {phone}",
-            "demo_otp": "123456"
+            "token": "demo_jwt_dr_priya",
+            "doctor": {"id": "doc_demo", "full_name": "Dr. Priya (Demo)", "role": "doctor"},
+            "community": {"id": "comm_demo", "name": "Rotary Community Health Outreach", "code": "CAMP-2026"}
         })
 
     @app.route("/api/auth/login", methods=["POST"])
@@ -772,6 +787,11 @@ def create_app(db_path: str = database.DEFAULT_DB_PATH) -> Flask:
         otp = (data.get("otp") or "").strip()
         password = data.get("password") or ""
         community_code = (data.get("community_code") or "").strip().upper() or "CAMP-2026"
+
+        demo_mode_active = os.getenv("DEMO_MODE", "0").lower() in ("1", "true")
+        is_demo_req = bool(data.get("is_demo") or data.get("demo") or email == "demo@clinic.camp")
+        if is_demo_req and not demo_mode_active:
+            return jsonify({"error": "Demo login is disabled in production. DEMO_MODE=1 required."}), 403
 
         comm = database.get_community_by_code(community_code, db_path=db_path)
         if not comm:

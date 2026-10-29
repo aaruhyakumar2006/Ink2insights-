@@ -64,9 +64,11 @@ def find_optimal_threshold(
     if not blur_scores:
         return 80.0, 0.0, 0.0
 
-    # Sort all blur scores
     # To catch 95% of blur, threshold must be >= the 95th percentile of blur scores
-    threshold = float(np.percentile(blur_scores, target_recall * 100.0))
+    try:
+        threshold = float(np.percentile(blur_scores, target_recall * 100.0, method="higher"))
+    except TypeError:
+        threshold = float(np.percentile(blur_scores, target_recall * 100.0))
     
     # Calculate actual recall and false alarm
     caught_blur = sum(1 for s in blur_scores if s <= threshold)

@@ -35,20 +35,28 @@ const state = {
 };
 
 // Demo Mode & Secure Context Utilities
-export function isDemoMode() {
+export function isServerDemoMode() {
+  return window.SERVER_DEMO_MODE === true || window.SERVER_DEMO_MODE === '1';
+}
+
+export function isDemoSheetAllowed() {
+  if (isServerDemoMode()) return true;
   try {
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get('demo') === '1') return true;
   } catch (e) {}
-  if (window.SERVER_DEMO_MODE === true || window.SERVER_DEMO_MODE === '1') return true;
   return false;
 }
 
+export function isDemoMode() {
+  return isServerDemoMode();
+}
+
 export function applyDemoModeUI() {
-  const isDemo = isDemoMode();
+  const isServerDemo = isServerDemoMode();
   const demoBtn = $('login-demo-btn');
   if (demoBtn) {
-    demoBtn.style.display = isDemo ? 'flex' : 'none';
+    demoBtn.style.display = isServerDemo ? 'flex' : 'none';
   }
 }
 
@@ -1049,12 +1057,24 @@ export function closeScan() {
   go('home');
 }
 
-export function uploadPhoto() {
-  const input = $('camera-file-input');
+export function takePhotoWithCamera() {
+  const input = $('camera-photo-input') || $('camera-file-input');
   if (input) {
     input.value = '';
     input.click();
   }
+}
+
+export function uploadFromGallery() {
+  const input = $('camera-gallery-input') || $('camera-file-input');
+  if (input) {
+    input.value = '';
+    input.click();
+  }
+}
+
+export function uploadPhoto() {
+  uploadFromGallery();
 }
 
 export async function flipCamera() {
@@ -1093,15 +1113,18 @@ export async function captureCurrentPage() {
 
   // If no webcam frame, handle demo vs real camera path
   if (!captured) {
-    if (isDemoMode()) {
-      captured = await generatePageCanvasBlob(state.currentScanPage + 1);
-      sc.setPageImage(state.currentScanPage, captured.blob, captured.url, `page_${state.currentScanPage + 1}.jpg`);
-    } else {
-      // Production path: camera inactive -> open file picker (camera-file-input) and show toast
-      const fileInput = $('camera-file-input');
-      if (fileInput) {
-        fileInput.click();
+    if (isDemoSheetAllowed()) {
+      try {
+        captured = await generatePageCanvasBlob(state.currentScanPage + 1);
+        if (captured) {
+          sc.setPageImage(state.currentScanPage, captured.blob, captured.url, `page_${state.currentScanPage + 1}.jpg`);
+        }
+      } catch (err) {
+        console.warn('Synthetic generation failed:', err);
       }
+    } else {
+      // Production path: camera inactive -> open take photo camera picker and show toast
+      takePhotoWithCamera();
       toast('Camera inactive. Please select or capture an image using your device camera.');
       return;
     }
@@ -3432,7 +3455,11 @@ window.app = {
   toggleTheme,
   initTheme,
   isDemoMode,
+  isServerDemoMode,
+  isDemoSheetAllowed,
   applyDemoModeUI,
+  takePhotoWithCamera,
+  uploadFromGallery,
   checkSecureContext,
   finishSplash: () => window.finishSplash && window.finishSplash(),
   showOfflineQueueStatus,

@@ -299,12 +299,25 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             cursor.execute("ALTER TABLE records ADD COLUMN original_ai_extraction TEXT;")
         if "quality_warning_bypassed" not in rec_cols:
             cursor.execute("ALTER TABLE records ADD COLUMN quality_warning_bypassed TEXT DEFAULT '[]';")
+        if "quality_bypassed" not in rec_cols:
+            cursor.execute("ALTER TABLE records ADD COLUMN quality_bypassed INTEGER DEFAULT 0;")
         if "target_group" not in rec_cols:
             cursor.execute("ALTER TABLE records ADD COLUMN target_group TEXT DEFAULT 'adult';")
         if "is_paediatric" not in rec_cols:
             cursor.execute("ALTER TABLE records ADD COLUMN is_paediatric INTEGER DEFAULT 0;")
         if "paediatric_alerts" not in rec_cols:
             cursor.execute("ALTER TABLE records ADD COLUMN paediatric_alerts TEXT DEFAULT '[]';")
+
+        # Migrations for adult_records & paediatric_records
+        cursor.execute("PRAGMA table_info(adult_records);")
+        adult_cols = [r["name"] for r in cursor.fetchall()]
+        if "quality_bypassed" not in adult_cols:
+            cursor.execute("ALTER TABLE adult_records ADD COLUMN quality_bypassed INTEGER DEFAULT 0;")
+
+        cursor.execute("PRAGMA table_info(paediatric_records);")
+        paed_cols = [r["name"] for r in cursor.fetchall()]
+        if "quality_bypassed" not in paed_cols:
+            cursor.execute("ALTER TABLE paediatric_records ADD COLUMN quality_bypassed INTEGER DEFAULT 0;")
 
         # Invites table (Single-use tokenized invites with TTL & role)
         cursor.execute("""
@@ -991,8 +1004,8 @@ def insert_adult_record(record_data: Dict[str, Any], db_path: str = DEFAULT_DB_P
                 page2_preview, reviewer_notes, reviewed_by, reviewed_at, approved_by,
                 approved_at, scanned_by, community_id, edit_history, version,
                 confidence_scores, locked_by, locked_at, original_ai_extraction,
-                quality_warning_bypassed, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                quality_warning_bypassed, quality_bypassed, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """, (
             rec_id,
             record_data["camp_id"],
@@ -1055,6 +1068,7 @@ def insert_adult_record(record_data: Dict[str, Any], db_path: str = DEFAULT_DB_P
             _clean_field_val(record_data.get("locked_at")),
             json.dumps(record_data.get("original_ai_extraction", {})),
             json.dumps(record_data.get("quality_warning_bypassed", [])),
+            1 if record_data.get("quality_bypassed") else 0,
             now,
             now
         ))
@@ -1093,8 +1107,8 @@ def insert_paediatric_record(record_data: Dict[str, Any], db_path: str = DEFAULT
                 page1_preview, page2_preview, reviewer_notes, reviewed_by, reviewed_at,
                 approved_by, approved_at, scanned_by, community_id, edit_history, version,
                 confidence_scores, locked_by, locked_at, original_ai_extraction,
-                quality_warning_bypassed, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                quality_warning_bypassed, quality_bypassed, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """, (
             rec_id,
             record_data["camp_id"],
@@ -1170,6 +1184,7 @@ def insert_paediatric_record(record_data: Dict[str, Any], db_path: str = DEFAULT
             _clean_field_val(record_data.get("locked_at")),
             json.dumps(record_data.get("original_ai_extraction", {})),
             json.dumps(record_data.get("quality_warning_bypassed", [])),
+            1 if record_data.get("quality_bypassed") else 0,
             now,
             now
         ))
@@ -1225,9 +1240,9 @@ def insert_record(record_data: Dict[str, Any], db_path: str = DEFAULT_DB_PATH) -
                 missing_fields, uncertain_fields, extraction_notes, structured_record,
                 status, page1_preview, page2_preview, reviewer_notes,
                 reviewed_by, reviewed_at, scanned_by, original_ai_extraction,
-                quality_warning_bypassed, target_group, is_paediatric, paediatric_alerts,
+                quality_warning_bypassed, quality_bypassed, target_group, is_paediatric, paediatric_alerts,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """, (
             rec_id,
             camp_id,
@@ -1252,6 +1267,7 @@ def insert_record(record_data: Dict[str, Any], db_path: str = DEFAULT_DB_PATH) -
             scanned_by,
             orig_ai_json,
             bypassed_quality_json,
+            1 if record_data.get("quality_bypassed") else 0,
             tg,
             is_paed,
             paed_alerts_json,
@@ -2246,6 +2262,7 @@ def _format_record_row(row: sqlite3.Row) -> Dict[str, Any]:
         "scanned_by": row["scanned_by"] if "scanned_by" in row.keys() else "Dr. Priya",
         "original_ai_extraction": original_ai_extraction,
         "quality_warning_bypassed": quality_warning_bypassed,
+        "quality_bypassed": bool(row["quality_bypassed"]) if "quality_bypassed" in row.keys() and row["quality_bypassed"] else False,
         "created_at": row["created_at"],
         "updated_at": row["updated_at"]
     }

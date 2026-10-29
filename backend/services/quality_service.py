@@ -100,6 +100,8 @@ def assess_image_quality(
             img = Image.open(image_input)
         elif isinstance(image_input, Image.Image):
             img = image_input
+        elif isinstance(image_input, str) and os.path.exists(image_input):
+            img = Image.open(image_input)
         else:
             return {
                 "ok": None,
@@ -135,18 +137,21 @@ def assess_image_quality(
             new_w = max(1, int(round(640 * w / h)))
 
         resized = img.convert("RGB").resize((new_w, new_h), Image.Resampling.BILINEAR)
+        rgb_arr = np.array(resized, dtype=np.uint8)
         gray = resized.convert("L")
         gray_arr = np.array(gray, dtype=np.uint8)
 
         # 3. Brightness: mean pixel luminance (0-255)
         brightness = float(np.mean(gray_arr))
 
-        # 4. Glare: percentage of near-white saturated pixels (> 250)
-        glare_count = int(np.sum(gray_arr > 250))
-        glare_pct = float((glare_count / gray_arr.size) * 100.0)
+        # 4. Glare: percentage of near-white AND saturated/specular clipped pixels (>= 250 across RGB channels)
+        # Real camera glare pegs sensor dynamic range blowout across all channels; normal white paper does not.
+        specular_clipped = (rgb_arr[:, :, 0] >= 250) & (rgb_arr[:, :, 1] >= 250) & (rgb_arr[:, :, 2] >= 250)
+        glare_count = int(np.sum(specular_clipped))
+        glare_pct = float((glare_count / (new_w * new_h)) * 100.0)
 
-        # 5. Sharpness: high percentile of tile Laplacian variance
-        blur_score = compute_tile_laplacian_variance(gray_arr, grid_size=8, percentile=75.0)
+        # 5. Sharpness: high percentile (85th) of tile Laplacian variance
+        blur_score = compute_tile_laplacian_variance(gray_arr, grid_size=8, percentile=85.0)
 
         issues: List[str] = []
         if brightness < d_max:

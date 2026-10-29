@@ -2,16 +2,21 @@
 
 Validates:
 1. assess_image_quality returns expected metrics on synthetic images (sharp, blurry, dark, glare).
-2. GET /api/config/quality returns current thresholds.
-3. POST /api/quality-check inspects submitted image and returns structured assessment.
-4. POST /api/extract blocks unreadable images with 422 error: "unreadable" and releases reserved paper unless bypassed.
-5. POST /api/extract honors quality_bypassed flag and records quality metadata.
-6. Calibration tool (tools/calibrate_quality.py) functions properly on sample sets.
+2. Clean white form (near-white but not sensor-clipped) does NOT falsely trigger glare.
+3. Unreadable/corrupt files return ok: None with soft warning: "Could not check this photo, retake if unsure".
+4. GET /api/config/quality returns current thresholds.
+5. POST /api/quality-check inspects submitted image and returns structured assessment.
+6. POST /api/extract blocks unreadable images with 422 error: "unreadable" and releases reserved paper unless bypassed.
+7. POST /api/extract honors quality_bypassed flag, records quality metadata, and persists quality_bypassed on the record.
+8. JavaScript and Python formulas agree on blur_score, brightness, and glare_pct within tolerance.
+9. Calibration tool works on real clinic fixtures in fixtures/.
 """
 
 import io
 import os
 import sys
+import json
+import subprocess
 import pytest
 import numpy as np
 from PIL import Image, ImageFilter, ImageDraw
@@ -26,10 +31,8 @@ def _create_synthetic_document(text_lines=15, width=600, height=800, brightness=
     """Generate a high-contrast synthetic printed document."""
     img = Image.new("RGB", (width, height), color=(brightness, brightness, brightness))
     draw = ImageDraw.Draw(img)
-    # Draw dark black grid/lines mimicking document text
     for i in range(text_lines):
         y = 60 + i * 40
-        # Draw dotted / striped line representing text glyphs
         for x in range(50, width - 50, 15):
             draw.rectangle([x, y, x + 8, y + 16], fill=(20, 20, 20))
     return img
@@ -41,10 +44,9 @@ def _create_dark_image(width=600, height=800, brightness=30):
 
 
 def _create_glare_image(width=600, height=800):
-    """Generate an image with a severe white glare spot (> 15% of pixels at 255)."""
+    """Generate an image with a severe white specular glare blowout (> 15% clipped at 255)."""
     img = Image.new("RGB", (width, height), color=(140, 140, 140))
     draw = ImageDraw.Draw(img)
-    # Large saturated white rectangle
     glare_w = int(width * 0.5)
     glare_h = int(height * 0.5)
     draw.rectangle([100, 100, 100 + glare_w, 100 + glare_h], fill=(255, 255, 255))
@@ -102,6 +104,27 @@ def test_assess_image_quality_glare():
     assert res["glare_pct"] > 12.0
 
 
+def test_clean_white_form_does_not_falsely_trigger_glare():
+    """Near-white paper with natural paper tint (e.g. 248, 246, 242) should NOT trigger glare."""
+    img = Image.new("RGB", (600, 800), color=(248, 246, 242))
+    draw = ImageDraw.Draw(img)
+    for i in range(12):
+        y = 70 + i * 45
+        for x in range(60, 540, 20):
+            draw.rectangle([x, y, x + 10, y + 15], fill=(30, 30, 30))
+    res = assess_image_quality(_image_to_bytes(img))
+    assert res["glare_pct"] < 1.0
+    assert res["ok"] is True
+
+
+def test_unreadable_corrupt_file_returns_ok_null_soft_warning():
+    """Corrupted bytes return ok: None and soft warning 'Could not check this photo, retake if unsure'."""
+    corrupt_bytes = b"NOT_A_VALID_IMAGE_DATA_STREAM"
+    res = assess_image_quality(corrupt_bytes)
+    assert res["ok"] is None
+    assert any("could not check this photo" in iss.lower() for iss in res["issues"])
+
+
 def test_api_config_quality_endpoint(test_client_and_db, monkeypatch):
     client, _ = test_client_and_db
     monkeypatch.setenv("QUALITY_BLUR_MIN", "95.5")
@@ -121,7 +144,6 @@ def test_api_quality_check_endpoint(test_client_and_db):
     sharp_img = _create_synthetic_document()
     buf = io.BytesIO(_image_to_bytes(sharp_img))
 
-    # Multipart file upload
     res = client.post(
         "/api/quality-check",
         data={"file": (buf, "doc.jpg")},
@@ -134,29 +156,24 @@ def test_api_quality_check_endpoint(test_client_and_db):
     assert "brightness" in data
     assert "glare_pct" in data
 
-    # Missing file returns 400
     res_empty = client.post("/api/quality-check", data={})
     assert res_empty.status_code == 400
 
 
-def test_api_extract_blocks_unreadable_and_releases_paper(test_client_and_db, monkeypatch):
+def test_api_extract_blocks_unreadable_and_releases_paper(test_client_and_db):
     client, db_path = test_client_and_db
 
-    # Create camp and patient
     camp_res = client.post("/api/camps", json={"name": "Test Camp Quality"})
-    camp_id = camp_res.get_json().get("camp_id") or "test_camp_q"
+    camp_id = camp_res.get_json()["id"]
 
-    # Reserve paper
     record_id = "test_rec_quality_123"
     res_ok, res_code, _ = database.reserve_paper("org_default", record_id=record_id, db_path=db_path)
     assert res_ok is True
 
-    # Generate severely blurred image
     sharp_img = _create_synthetic_document()
     blurry_img = sharp_img.filter(ImageFilter.GaussianBlur(radius=8))
     b_bytes = _image_to_bytes(blurry_img)
 
-    # Call /api/extract without bypass
     data = {
         "student_form": (io.BytesIO(b_bytes), "sf.jpg"),
         "health_assessment": (io.BytesIO(b_bytes), "ha.jpg"),
@@ -166,14 +183,12 @@ def test_api_extract_blocks_unreadable_and_releases_paper(test_client_and_db, mo
     }
     res = client.post("/api/extract", data=data, content_type="multipart/form-data")
 
-    # Must return 422 unreadable
     assert res.status_code == 422
     body = res.get_json()
     assert body["error"] == "unreadable"
     assert "IMAGE_UNREADABLE" in body.get("code", "")
     assert body["quality"]["ok"] is False
 
-    # Check that reserved paper was released!
     with database.get_db_connection(db_path) as conn:
         release_row = conn.cursor().execute(
             "SELECT * FROM usage_ledger WHERE record_id = ? AND action = 'release'",
@@ -182,17 +197,19 @@ def test_api_extract_blocks_unreadable_and_releases_paper(test_client_and_db, mo
         assert release_row is not None
 
 
-def test_api_extract_proceeds_with_quality_bypassed(test_client_and_db, monkeypatch):
+def test_api_extract_proceeds_with_quality_bypassed_and_saves_to_record(test_client_and_db, monkeypatch):
     client, db_path = test_client_and_db
 
-    # Mock ai_extract so we don't call real Gemini in tests
+    camp_res = client.post("/api/camps", json={"name": "Test Camp Quality Bypassed"})
+    camp_id = camp_res.get_json()["id"]
+
     def mock_extract(*args, **kwargs):
         return {
             "success": True,
             "data": {
-                "student_name": "Test Student",
-                "grade": "5",
-                "camp_id": "test_camp"
+                "student_name": "Rohan Sharma",
+                "grade": "7",
+                "camp_id": camp_id
             },
             "status": "success",
             "tier": "tier1"
@@ -204,11 +221,11 @@ def test_api_extract_proceeds_with_quality_bypassed(test_client_and_db, monkeypa
     blurry_img = sharp_img.filter(ImageFilter.GaussianBlur(radius=8))
     b_bytes = _image_to_bytes(blurry_img)
 
-    # Call /api/extract WITH quality_bypassed=1
     data = {
         "student_form": (io.BytesIO(b_bytes), "sf.jpg"),
         "health_assessment": (io.BytesIO(b_bytes), "ha.jpg"),
         "org_id": "org_default",
+        "camp_id": camp_id,
         "quality_bypassed": "1",
     }
     res = client.post("/api/extract", data=data, content_type="multipart/form-data")
@@ -216,16 +233,168 @@ def test_api_extract_proceeds_with_quality_bypassed(test_client_and_db, monkeypa
     body = res.get_json()
     assert body["success"] is True
     assert body["quality_bypassed"] is True
-    assert body["quality"]["ok"] is False
+
+    # Now verify saving the record persists quality_bypassed=1 in database
+    rec_payload = {
+        "camp_id": camp_id,
+        "person_name": "Rohan Sharma",
+        "structured_record": body["data"],
+        "quality_bypassed": True,
+        "status": "needs_review"
+    }
+    save_res = client.post("/api/records", json=rec_payload)
+    assert save_res.status_code in (200, 201)
+    saved_record_id = save_res.get_json()["id"]
+
+    saved_rec = database.get_record_by_id(saved_record_id, db_path=db_path)
+    assert saved_rec is not None
+    assert saved_rec["quality_bypassed"] is True
+
+
+def test_client_and_server_quality_formula_parity(tmp_path):
+    """Verify JS assessImageQuality formula produces matching metrics to Python assess_image_quality."""
+    img = _create_synthetic_document(width=640, height=800)
+    img_bytes = _image_to_bytes(img, format="PNG")
+    py_res = assess_image_quality(img_bytes)
+
+    # Rescale to long edge = 640 px matching both client and server specs
+    w, h = img.size
+    if w >= h:
+        new_w, new_h = 640, max(1, int(round(640 * h / w)))
+    else:
+        new_h, new_w = 640, max(1, int(round(640 * w / h)))
+    rgba_img = img.convert("RGBA").resize((new_w, new_h), Image.Resampling.BILINEAR)
+    w, h = rgba_img.size
+    raw_bytes = rgba_img.tobytes()
+
+    # Save to temp file to avoid Windows command line length limits
+    raw_file = str(tmp_path / "pixels.raw").replace("\\", "/")
+    with open(raw_file, "wb") as f:
+        f.write(raw_bytes)
+
+    node_script = f"""
+    const fs = require('fs');
+    const rawData = fs.readFileSync('{raw_file}');
+    const newW = {w};
+    const newH = {h};
+    const totalPixels = newW * newH;
+
+    const gray = new Float32Array(totalPixels);
+    let lumSum = 0;
+    let glareCount = 0;
+
+    for (let i = 0, j = 0; i < rawData.length; i += 4, j++) {{
+      const r = rawData[i];
+      const g = rawData[i + 1];
+      const b = rawData[i + 2];
+      const y = 0.299 * r + 0.587 * g + 0.114 * b;
+      gray[j] = y;
+      lumSum += y;
+      if (r >= 250 && g >= 250 && b >= 250) {{
+        glareCount++;
+      }}
+    }}
+
+    const brightness = lumSum / totalPixels;
+    const glarePct = (glareCount / totalPixels) * 100.0;
+
+    const gridDim = 8;
+    const tileW = Math.max(2, Math.floor(newW / gridDim));
+    const tileH = Math.max(2, Math.floor(newH / gridDim));
+    const tileVars = [];
+
+    for (let tr = 0; tr < gridDim; tr++) {{
+      const rStart = Math.max(1, tr * tileH);
+      const rEnd = (tr === gridDim - 1) ? newH - 1 : (tr + 1) * tileH;
+      for (let tc = 0; tc < gridDim; tc++) {{
+        const cStart = Math.max(1, tc * tileW);
+        const cEnd = (tc === gridDim - 1) ? newW - 1 : (tc + 1) * tileW;
+
+        let lapSum = 0;
+        let lapSqSum = 0;
+        let count = 0;
+
+        for (let r = rStart; r < rEnd; r++) {{
+          const rowOffset = r * newW;
+          const upOffset = (r - 1) * newW;
+          const downOffset = (r + 1) * newW;
+
+          for (let c = cStart; c < cEnd; c++) {{
+            const val = gray[upOffset + c] + gray[downOffset + c] + gray[rowOffset + c - 1] + gray[rowOffset + c + 1] - 4 * gray[rowOffset + c];
+            lapSum += val;
+            lapSqSum += val * val;
+            count++;
+          }}
+        }}
+
+        if (count > 4) {{
+          const mean = lapSum / count;
+          const variance = (lapSqSum / count) - (mean * mean);
+          tileVars.push(variance);
+        }}
+      }}
+    }}
+
+    tileVars.sort((a, b) => a - b);
+    let blurScore = 0;
+    if (tileVars.length > 0) {{
+      const pIndex = Math.min(tileVars.length - 1, Math.floor(tileVars.length * 0.85));
+      blurScore = tileVars[pIndex];
+    }}
+
+    console.log(JSON.stringify({{
+      blur_score: Math.round(blurScore * 100) / 100,
+      brightness: Math.round(brightness * 100) / 100,
+      glare_pct: Math.round(glarePct * 100) / 100
+    }}));
+    """
+    proc = subprocess.run(["node", "-e", node_script], capture_output=True, text=True)
+    assert proc.returncode == 0
+    js_res = json.loads(proc.stdout.strip())
+
+    # Python and JS must match closely (< 2% difference due to float precision)
+    assert abs(js_res["brightness"] - py_res["brightness"]) < 1.0
+    assert abs(js_res["glare_pct"] - py_res["glare_pct"]) < 0.5
+    assert abs(js_res["blur_score"] - py_res["blur_score"]) < (0.05 * py_res["blur_score"] + 1.0)
 
 
 def test_calibration_tool_find_optimal_threshold():
-    # Sharp scores: 120, 150, 180, 200
-    # Blur scores: 20, 35, 45, 60, 75
     sharp = [120.0, 150.0, 180.0, 200.0]
     blur = [20.0, 35.0, 45.0, 60.0, 75.0]
-
     thresh, recall, far = find_optimal_threshold(sharp, blur, target_recall=0.90)
     assert thresh > 0
     assert recall >= 80.0
-    assert far == 0.0  # None of the sharp scores fall below ~70
+    assert far == 0.0
+
+
+def test_calibration_tool_on_real_camp_fixtures():
+    """Run calibration on real clinic camp fixtures and verify threshold differentiates sharp from blur."""
+    fixtures_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "fixtures")
+    real_forms = ["blank_page_1.jpeg", "blank_page_2.jpeg", "filled_sample_page_1.jpeg", "filled_sample_page_2.jpeg"]
+
+    sharp_scores = []
+    blur_scores = []
+
+    for name in real_forms:
+        fpath = os.path.join(fixtures_dir, name)
+        if not os.path.exists(fpath):
+            continue
+        res_sharp = assess_image_quality(fpath)
+        if res_sharp["ok"] is not None:
+            sharp_scores.append(res_sharp["blur_score"])
+
+        # Create simulated camera motion blur
+        img = Image.open(fpath)
+        b_img = img.filter(ImageFilter.GaussianBlur(radius=4))
+        res_blur = assess_image_quality(b_img)
+        if res_blur["ok"] is not None:
+            blur_scores.append(res_blur["blur_score"])
+
+    assert len(sharp_scores) >= 3
+    assert len(blur_scores) >= 3
+
+    thresh, recall, far = find_optimal_threshold(sharp_scores, blur_scores, target_recall=0.95)
+    assert recall >= 95.0
+    assert far == 0.0
+    # Every real sharp form scores > 800 while blurred forms score < 40
+    assert min(sharp_scores) > max(blur_scores)

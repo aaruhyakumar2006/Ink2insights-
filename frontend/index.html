@@ -658,10 +658,16 @@
 
       <!-- Quick Action Utilities -->
       <div class="scan-utils-bar">
+        <input type="file" id="camera-photo-input" accept="image/*" capture="environment" style="display:none;" onchange="window.app.onFileUploaded(event)">
+        <input type="file" id="camera-gallery-input" accept="image/*" style="display:none;" onchange="window.app.onFileUploaded(event)">
         <input type="file" id="camera-file-input" accept="image/*" capture="environment" style="display:none;" onchange="window.app.onFileUploaded(event)">
-        <button type="button" class="btn ghost" onclick="window.app.uploadPhoto()">
+        <button type="button" class="btn ghost" id="btn-take-photo" onclick="window.app.takePhotoWithCamera()">
+          <svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
+          Take Photo
+        </button>
+        <button type="button" class="btn ghost" id="btn-upload-gallery" onclick="window.app.uploadFromGallery()">
           <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
-          Upload Form Photo
+          Upload from Gallery
         </button>
         <button type="button" class="btn ghost" onclick="window.app.flipCamera()">
           <svg viewBox="0 0 24 24"><path d="M1 4v6h6M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg>

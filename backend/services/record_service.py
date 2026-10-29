@@ -161,6 +161,7 @@ class RecordService:
             "page2_preview": data.get("page2_preview"),
             "original_ai_extraction": data.get("original_ai_extraction") or data.get("structured_record", {}),
             "quality_warning_bypassed": data.get("quality_warning_bypassed", []),
+            "quality_bypassed": 1 if data.get("quality_bypassed") else 0,
             "target_group": data.get("target_group") or (camp.get("target_group") if camp else "adult"),
             "is_paediatric": 1 if (data.get("is_paediatric") or (camp and camp.get("target_group") == "paediatric")) else 0,
             "paediatric_alerts": data.get("paediatric_alerts", []),
