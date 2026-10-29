@@ -445,6 +445,10 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             cursor.execute("ALTER TABLE doctors ADD COLUMN community_code TEXT;")
         if "community_role" not in doc_cols:
             cursor.execute("ALTER TABLE doctors ADD COLUMN community_role TEXT DEFAULT 'doctor';")
+        if "pin_hash" not in doc_cols:
+            cursor.execute("ALTER TABLE doctors ADD COLUMN pin_hash TEXT;")
+        if "pin_salt" not in doc_cols:
+            cursor.execute("ALTER TABLE doctors ADD COLUMN pin_salt TEXT;")
             
         # Index for fast filtering by camp, status, community
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_records_camp ON records(camp_id);")
@@ -645,6 +649,8 @@ def list_camps_with_stats(db_path: str = DEFAULT_DB_PATH) -> List[Dict[str, Any]
                 c.date_str,
                 c.expected_records,
                 c.location,
+                c.created_by,
+                c.community_id,
                 c.target_group,
                 c.created_at,
                 COUNT(r.id) AS total_scanned,
@@ -670,6 +676,8 @@ def list_camps_with_stats(db_path: str = DEFAULT_DB_PATH) -> List[Dict[str, Any]
                 "date_str": row["date_str"],
                 "expected_records": expected,
                 "location": row["location"] if "location" in row.keys() else "Chennai",
+                "created_by": row["created_by"] if "created_by" in row.keys() else None,
+                "community_id": row["community_id"] if "community_id" in row.keys() else None,
                 "target_group": tg,
                 "total_scanned": scanned,
                 "to_check": to_check,
@@ -686,7 +694,7 @@ def get_camp_by_id(camp_id: str, db_path: str = DEFAULT_DB_PATH) -> Optional[Dic
         cursor = conn.cursor()
         cursor.execute("""
             SELECT 
-                c.id, c.name, c.date_str, c.expected_records, c.location, c.created_by, c.target_group, c.created_at,
+                c.id, c.name, c.date_str, c.expected_records, c.location, c.created_by, c.community_id, c.target_group, c.created_at,
                 COUNT(r.id) AS total_scanned,
                 SUM(CASE WHEN r.status = 'needs_review' THEN 1 ELSE 0 END) AS to_check,
                 SUM(CASE WHEN r.status IN ('reviewed', 'approved') THEN 1 ELSE 0 END) AS reviewed
@@ -706,6 +714,7 @@ def get_camp_by_id(camp_id: str, db_path: str = DEFAULT_DB_PATH) -> Optional[Dic
             "expected_records": row["expected_records"],
             "location": row["location"] if "location" in row.keys() else "Chennai",
             "created_by": row["created_by"] if "created_by" in row.keys() else None,
+            "community_id": row["community_id"] if "community_id" in row.keys() else None,
             "target_group": tg,
             "total_scanned": row["total_scanned"] or 0,
             "to_check": row["to_check"] or 0,
@@ -721,6 +730,7 @@ def create_camp(
     created_by: Optional[str] = None,
     camp_id: Optional[str] = None,
     target_group: str = "adult",
+    community_id: Optional[str] = None,
     db_path: str = DEFAULT_DB_PATH,
     **kwargs
 ) -> Dict[str, Any]:
@@ -735,6 +745,11 @@ def create_camp(
     if target_group not in ("adult", "paediatric"):
         target_group = "adult"
 
+    if "community_id" in kwargs and not community_id:
+        community_id = kwargs["community_id"]
+    if "org_id" in kwargs and not community_id:
+        community_id = kwargs["org_id"]
+
     init_db(db_path)
     if not camp_id:
         camp_id = f"camp_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{os.urandom(3).hex()}"
@@ -742,9 +757,9 @@ def create_camp(
     with get_db_connection(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT OR REPLACE INTO camps (id, name, date_str, expected_records, location, created_by, target_group, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
-        """, (camp_id, name.strip(), date_str, max(1, expected_records), location, created_by, target_group, now, now))
+            INSERT OR REPLACE INTO camps (id, name, date_str, expected_records, location, created_by, community_id, target_group, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """, (camp_id, name.strip(), date_str, max(1, expected_records), location, created_by, community_id, target_group, now, now))
         conn.commit()
     return get_camp_by_id(camp_id, db_path) # type: ignore
 
@@ -3391,5 +3406,34 @@ def generate_patient_referral_pdf(record_data: Dict[str, Any], output_path: str)
 
     doc.build(elements)
     return output_path
+
+
+def set_doctor_pin(doctor_id: str, pin: str, db_path: str = DEFAULT_DB_PATH) -> bool:
+    """Hash and persist doctor quick-unlock PIN."""
+    from backend.services.auth_service import hash_pin
+    init_db(db_path)
+    hashed, salt = hash_pin(pin)
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db_connection(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE doctors SET pin_hash = ?, pin_salt = ?, updated_at = ? WHERE id = ?;
+        """, (hashed, salt, now, doctor_id))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def verify_doctor_pin(doctor_id: str, pin: str, db_path: str = DEFAULT_DB_PATH) -> bool:
+    """Verify submitted PIN against stored hash for doctor."""
+    from backend.services.auth_service import verify_pin
+    init_db(db_path)
+    with get_db_connection(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT pin_hash, pin_salt FROM doctors WHERE id = ?;", (doctor_id,))
+        row = cursor.fetchone()
+        if not row or not row["pin_hash"] or not row["pin_salt"]:
+            return False
+        return verify_pin(pin, row["pin_hash"], row["pin_salt"])
+
 
 

@@ -20,7 +20,7 @@ from PIL import Image, ImageOps
 logger = logging.getLogger("i2i.quality")
 
 # Environment Thresholds (calibrated on real clinic camp intake forms)
-DEFAULT_BLUR_MIN = float(os.getenv("QUALITY_BLUR_MIN", "200.0"))
+DEFAULT_BLUR_MIN = float(os.getenv("QUALITY_BLUR_MIN", "280.0"))
 DEFAULT_DARK_MAX = float(os.getenv("QUALITY_DARK_MAX", "50.0"))
 DEFAULT_GLARE_MAX = float(os.getenv("QUALITY_GLARE_MAX", "12.0"))
 
@@ -28,7 +28,7 @@ DEFAULT_GLARE_MAX = float(os.getenv("QUALITY_GLARE_MAX", "12.0"))
 def get_quality_config() -> Dict[str, float]:
     """Retrieve active quality thresholds from environment."""
     return {
-        "blur_min": float(os.getenv("QUALITY_BLUR_MIN", "200.0")),
+        "blur_min": float(os.getenv("QUALITY_BLUR_MIN", "280.0")),
         "dark_max": float(os.getenv("QUALITY_DARK_MAX", "50.0")),
         "glare_max": float(os.getenv("QUALITY_GLARE_MAX", "12.0")),
     }

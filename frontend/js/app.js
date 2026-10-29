@@ -4,7 +4,7 @@
  */
 
 import { api, offlineQueue, registerOfflineSupport } from './api.js';
-import { DocumentScanner } from './scanner.js';
+import { DocumentScanner, DEFAULT_QUALITY_FALLBACK } from './scanner.js';
 
 
 // DOM Selector Utility
@@ -953,6 +953,29 @@ export async function toggleTorch() {
   toast(isOn ? 'Torch turned ON 🔦' : 'Torch turned OFF');
 }
 
+export function updateQualityDebugOnScreen(p1Client, p1Server, p2Client, p2Server) {
+  const isDebug = typeof window !== 'undefined' && (new URLSearchParams(window.location.search).get('debug') === '1');
+  if (!isDebug) return;
+
+  let pill = $('debug-quality-pill');
+  if (!pill && typeof document !== 'undefined') {
+    pill = document.createElement('div');
+    pill.id = 'debug-quality-pill';
+    pill.style.cssText = 'position:fixed;bottom:14px;left:14px;z-index:999999;background:rgba(15,23,42,0.94);color:#34D399;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11.5px;padding:8px 12px;border-radius:8px;border:1.5px solid #10B981;box-shadow:0 10px 25px rgba(0,0,0,0.5);max-width:92vw;pointer-events:none;line-height:1.4;';
+    document.body.appendChild(pill);
+  }
+  if (pill) {
+    pill.textContent = `🔍 [DEBUG ?debug=1] Blur Scores: P1 Client: ${p1Client ?? 'N/A'} | Server: ${p1Server ?? 'N/A'} ── P2 Client: ${p2Client ?? 'N/A'} | Server: ${p2Server ?? 'N/A'}`;
+    pill.style.display = 'block';
+  }
+
+  const modalDebug = $('quality-debug-scores');
+  if (modalDebug) {
+    modalDebug.textContent = `🔍 [DEBUG ?debug=1] P1 (Client: ${p1Client ?? 'N/A'}, Server: ${p1Server ?? 'N/A'}) · P2 (Client: ${p2Client ?? 'N/A'}, Server: ${p2Server ?? 'N/A'})`;
+    modalDebug.style.display = 'block';
+  }
+}
+
 export function showQualityAlertModal(quality, onProceed, onRetake) {
   state.lastQuality = quality;
   const modal = $('modal-quality-alert');
@@ -971,6 +994,21 @@ export function showQualityAlertModal(quality, onProceed, onRetake) {
   }
   if (lumEl) lumEl.textContent = (quality.brightness !== undefined ? `${quality.brightness}` : (quality.avgLum !== undefined ? `${quality.avgLum}` : 'N/A')) + ' / 255';
   if (sharpEl) sharpEl.textContent = quality.blur_score !== undefined ? `${quality.blur_score}` : (quality.blurScore !== undefined ? `${quality.blurScore}` : 'N/A');
+
+  // Show on-screen debug scores if ?debug=1
+  const isDebug = typeof window !== 'undefined' && (new URLSearchParams(window.location.search).get('debug') === '1');
+  const debugScoresEl = $('quality-debug-scores');
+  if (debugScoresEl) {
+    if (isDebug) {
+      const cP1 = state.clientPageQualities?.[0]?.blur_score ?? 'N/A';
+      const cP2 = state.clientPageQualities?.[1]?.blur_score ?? 'N/A';
+      const sScore = quality.blur_score ?? quality.blurScore ?? 'N/A';
+      debugScoresEl.textContent = `🔍 [DEBUG ?debug=1] Client P1: ${cP1} | P2: ${cP2} ── Current Evaluated: ${sScore}`;
+      debugScoresEl.style.display = 'block';
+    } else {
+      debugScoresEl.style.display = 'none';
+    }
+  }
 
   const sc = getScannerInstance();
   if (torchBtn) {
@@ -1019,6 +1057,7 @@ export async function startScan() {
   state.currentScanPage = 0;
   state.pageBlobs = [null, null];
   state.pageUrls = [null, null];
+  state.clientPageQualities = [null, null];
   state.qualityBypassed = false;
   state.qualityWarningsBypassed = [];
 
@@ -1133,6 +1172,8 @@ export async function captureCurrentPage() {
   const applyCapture = () => {
     state.pageBlobs[state.currentScanPage] = captured.blob;
     state.pageUrls[state.currentScanPage] = captured.url;
+    if (!state.clientPageQualities) state.clientPageQualities = [null, null];
+    state.clientPageQualities[state.currentScanPage] = captured.quality || null;
 
     if (state.currentScanPage === 0) {
       // Move to Page 2
@@ -1175,6 +1216,8 @@ export async function onFileUploaded(event) {
     const applyUpload = () => {
       state.pageBlobs[state.currentScanPage] = res.blob;
       state.pageUrls[state.currentScanPage] = res.url;
+      if (!state.clientPageQualities) state.clientPageQualities = [null, null];
+      state.clientPageQualities[state.currentScanPage] = res.quality || null;
 
       if (state.currentScanPage === 0) {
         state.currentScanPage = 1;
@@ -1470,6 +1513,16 @@ export async function saveAndExtract() {
     toast('Transcribing document pages with Vision AI…');
     const extractRes = await api.extractPages(p1, p2, campId, state.qualityBypassed);
 
+    // Debug line comparing client and server blur scores for the same photo
+    const clientBlurP1 = (state.clientPageQualities && state.clientPageQualities[0]) ? state.clientPageQualities[0].blur_score : 'N/A';
+    const clientBlurP2 = (state.clientPageQualities && state.clientPageQualities[1]) ? state.clientPageQualities[1].blur_score : 'N/A';
+    const serverBlurP1 = (extractRes && extractRes.quality && extractRes.quality.page1) ? extractRes.quality.page1.blur_score : 'N/A';
+    const serverBlurP2 = (extractRes && extractRes.quality && extractRes.quality.page2) ? extractRes.quality.page2.blur_score : 'N/A';
+    console.log(`[QualityParity] Blur Scores — Client P1: ${clientBlurP1} | Server P1: ${serverBlurP1}  ──  Client P2: ${clientBlurP2} | Server P2: ${serverBlurP2}`);
+
+    // Show on screen behind ?debug=1
+    updateQualityDebugOnScreen(clientBlurP1, serverBlurP1, clientBlurP2, serverBlurP2);
+
     // ── Offline Queue sentinel: scan was encrypted + queued ──────────────
     if (extractRes && extractRes._offline_queued) {
       toast(extractRes.message || '📵 Scan saved to offline queue.');
@@ -1528,6 +1581,12 @@ export async function saveAndExtract() {
     // Server-side quality rejection (HTTP 422 unreadable) -> show quality alert modal
     if (ex.status === 422 && ex.data && ex.data.error === 'unreadable') {
       const q = ex.data.quality || { ok: false, issues: [ex.data.message || 'Image unreadable'] };
+      const sP1 = q.page1?.blur_score ?? 'N/A';
+      const sP2 = q.page2?.blur_score ?? 'N/A';
+      const cP1 = state.clientPageQualities?.[0]?.blur_score ?? 'N/A';
+      const cP2 = state.clientPageQualities?.[1]?.blur_score ?? 'N/A';
+      updateQualityDebugOnScreen(cP1, sP1, cP2, sP2);
+
       showQualityAlertModal(
         q,
         // On "Use anyway": bypass server check and retry extraction
@@ -3471,11 +3530,11 @@ function initApp() {
   checkSecureContext();
   applyDemoModeUI();
 
-  // Load server quality configuration
+  // Load server quality configuration (/api/config/quality is the sole source of truth)
   api.getQualityConfig().then(cfg => {
     window.QUALITY_CONFIG = cfg;
   }).catch(() => {
-    window.QUALITY_CONFIG = { blur_min: 200.0, dark_max: 50.0, glare_max: 12.0 };
+    window.QUALITY_CONFIG = DEFAULT_QUALITY_FALLBACK;
   });
 
   updateDoctorDisplays();

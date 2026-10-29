@@ -1989,9 +1989,10 @@
         <p id="quality-alert-message" style="font-size:13.5px;color:#475569;margin:0 0 14px;line-height:1.5;">
           The captured document appears blurry or has low lighting. Text may be difficult for the Vision AI to transcribe accurately.
         </p>
-        <div id="quality-metrics-pill" style="font-size:11.5px;font-weight:700;background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;padding:6px 12px;margin-bottom:18px;color:#64748B;">
+        <div id="quality-metrics-pill" style="font-size:11.5px;font-weight:700;background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;padding:6px 12px;margin-bottom:12px;color:#64748B;">
           Luminance: <span id="quality-metric-lum">--</span> · Sharpness: <span id="quality-metric-sharp">--</span>
         </div>
+        <div id="quality-debug-scores" style="display:none;font-size:11px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;background:#0F172A;color:#10B981;border-radius:6px;padding:6px 10px;margin-bottom:16px;text-align:left;line-height:1.4;"></div>
         <div style="display:flex;flex-direction:column;gap:10px;">
           <button class="btn" style="background:#0284C7;color:#fff;border-radius:10px;font-weight:700;padding:12px;" onclick="window.app.retryCaptureFromAlert()">
             🔄 Retake / Re-upload Photo

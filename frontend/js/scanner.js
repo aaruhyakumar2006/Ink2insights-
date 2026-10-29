@@ -14,6 +14,12 @@
  * Thresholds come from window.QUALITY_CONFIG, with defaults.
  * Never fails silently: returns ok: null on failure.
  */
+export const DEFAULT_QUALITY_FALLBACK = Object.freeze({
+  blur_min: 280.0,
+  dark_max: 50.0,
+  glare_max: 12.0
+});
+
 export async function assessImageQuality(imageOrCanvas) {
   try {
     if (!imageOrCanvas) {
@@ -148,11 +154,11 @@ export async function assessImageQuality(imageOrCanvas) {
       blurScore = tileVars[pIndex];
     }
 
-    // Config thresholds from window.QUALITY_CONFIG with defaults
-    const cfg = (typeof window !== 'undefined' && window.QUALITY_CONFIG) ? window.QUALITY_CONFIG : { blur_min: 200.0, dark_max: 50.0, glare_max: 12.0 };
-    const blurMin = typeof cfg.blur_min === 'number' ? cfg.blur_min : 200.0;
-    const darkMax = typeof cfg.dark_max === 'number' ? cfg.dark_max : 50.0;
-    const glareMax = typeof cfg.glare_max === 'number' ? cfg.glare_max : 12.0;
+    // /api/config/quality is the sole source of truth in the browser, with one fallback
+    const cfg = (typeof window !== 'undefined' && window.QUALITY_CONFIG) ? window.QUALITY_CONFIG : DEFAULT_QUALITY_FALLBACK;
+    const blurMin = typeof cfg.blur_min === 'number' ? cfg.blur_min : DEFAULT_QUALITY_FALLBACK.blur_min;
+    const darkMax = typeof cfg.dark_max === 'number' ? cfg.dark_max : DEFAULT_QUALITY_FALLBACK.dark_max;
+    const glareMax = typeof cfg.glare_max === 'number' ? cfg.glare_max : DEFAULT_QUALITY_FALLBACK.glare_max;
 
     const issues = [];
     if (brightness < darkMax) issues.push('Too dark / underexposed');

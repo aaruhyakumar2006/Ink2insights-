@@ -14,7 +14,7 @@ import io
 import re
 import logging
 from datetime import datetime, timezone
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, Optional
 from flask import Flask, request, jsonify, Response, send_from_directory
 from flask_cors import CORS
 try:
@@ -77,8 +77,11 @@ ALLOWED_MIME_TYPES = {
 MAX_FILE_SIZE = 15 * 1024 * 1024  # 15 MB per image (supports high-res iPhone photos)
 
 
-def create_app(db_path: str = database.DEFAULT_DB_PATH) -> Flask:
+def create_app(db_path: Optional[str] = None) -> Flask:
     """Application factory for Flask API."""
+    if not db_path:
+        db_path = os.environ.get("DATABASE_PATH") or database.DEFAULT_DB_PATH
+
     candidate_dirs = [
         os.path.abspath(os.path.join(PROJECT_ROOT, "frontend")),
         os.path.abspath(os.path.join(CURRENT_DIR, "..", "frontend")),
@@ -130,6 +133,16 @@ def create_app(db_path: str = database.DEFAULT_DB_PATH) -> Flask:
         }), 429
 
     def is_admin_request() -> bool:
+        from backend.services.auth_service import get_token_from_request, decode_access_token
+        token = get_token_from_request()
+        if token:
+            try:
+                payload = decode_access_token(token)
+                role = (payload.get("role") or "").lower()
+                return role in ("admin", "superuser")
+            except Exception:
+                return False
+
         admin_key = os.getenv("ADMIN_API_KEY", "admin_secret_key")
         if request.headers.get("X-Admin-Key") == admin_key:
             return True
@@ -265,19 +278,48 @@ def create_app(db_path: str = database.DEFAULT_DB_PATH) -> Flask:
         if target_group not in ("adult", "paediatric"):
             target_group = "adult"
 
+        # Token Authority: Take org_id and user from token only, overriding spoofed body/headers
+        from backend.services.auth_service import get_token_from_request, safe_decode_token
+        token = get_token_from_request()
+        token_payload = None
+        if token:
+            token_payload, _ = safe_decode_token(token)
+
+        if token_payload:
+            community_id = token_payload.get("org_id")
+            created_by = token_payload.get("name") or token_payload.get("user_id")
+        else:
+            community_id = data.get("community_id") or data.get("org_id") or request.headers.get("X-Org-ID")
+            created_by = data.get("created_by") or request.headers.get("X-Doctor-ID")
+
         if is_supabase_enabled():
             try:
                 camp = supabase_service.create_camp(name, expected, date_str)
                 # Also persist locally in SQLite for resilience using the exact same ID
                 try:
-                    database.create_camp(name, expected, date_str, location=location, camp_id=camp.get("id"), target_group=target_group, db_path=db_path)
+                    database.create_camp(
+                        name, expected, date_str,
+                        location=location,
+                        created_by=created_by,
+                        camp_id=camp.get("id"),
+                        target_group=target_group,
+                        community_id=community_id,
+                        db_path=db_path
+                    )
                 except Exception as db_err:
                     logger.warning("Local camp mirror warning: %s", db_err)
                 return jsonify(camp), 201
             except Exception as e:
                 logger.error("Failed to create camp in Supabase: %s; falling back to SQLite", e)
 
-        camp = database.create_camp(name, expected, date_str, location=location, target_group=target_group, db_path=db_path)
+        camp = database.create_camp(
+            name, expected, date_str,
+            location=location,
+            created_by=created_by,
+            target_group=target_group,
+            community_id=community_id,
+            db_path=db_path
+        )
         return jsonify(camp), 201
 
     @app.route("/api/camps/<camp_id>", methods=["GET"])
@@ -323,6 +365,14 @@ def create_app(db_path: str = database.DEFAULT_DB_PATH) -> Flask:
     # --- Records API ---
     @app.route("/api/records", methods=["GET"])
     def list_records():
+        from backend.services.auth_service import get_token_from_request, safe_decode_token
+        token = get_token_from_request()
+        if not token:
+            return jsonify({"error": "unauthorized", "message": "Authentication required. Bearer token missing."}), 401
+        payload, err = safe_decode_token(token)
+        if err or not payload:
+            return jsonify({"error": "unauthorized", "message": err or "Invalid token"}), 401
+
         camp_id = request.args.get("camp_id")
         status_filter = request.args.get("status")
         scanned_by = request.args.get("scanned_by")
@@ -437,8 +487,20 @@ def create_app(db_path: str = database.DEFAULT_DB_PATH) -> Flask:
     @app.route("/api/records/<record_id>/review", methods=["PUT", "POST"])
     def review_record(record_id):
         """Review and update record fields. Resolving flags alone does NOT approve or bill paper."""
+        from backend.services.auth_service import get_token_from_request, safe_decode_token
+        token = get_token_from_request()
         payload = request.get_json(silent=True) or {}
         reviewer = payload.get("reviewed_by", "Dr. Priya (Demo)")
+
+        if token:
+            tok_payload, err = safe_decode_token(token)
+            if err or not tok_payload:
+                return jsonify({"error": "unauthorized", "message": err or "Invalid token"}), 401
+            role = (tok_payload.get("role") or "").lower()
+            if role not in ("doctor", "admin", "superuser"):
+                return jsonify({"error": "forbidden", "message": f"Clinical review requires doctor role; current role '{role}' is forbidden."}), 403
+            if not payload.get("reviewed_by") and tok_payload.get("name"):
+                reviewer = tok_payload.get("name")
         
         try:
             if is_supabase_enabled():
@@ -715,7 +777,7 @@ def create_app(db_path: str = database.DEFAULT_DB_PATH) -> Flask:
             return jsonify({"valid": False, "error": "Community code is required"}), 400
         comm = database.get_community_by_code(code, db_path=db_path)
         if not comm:
-            return jsonify({"valid": False, "error": f"Invalid code '{code}'. Ask your organizer for the exact code."}), 404
+            return jsonify({"valid": False, "error": f"Invalid code '{code}'. Ask your organizer for the exact code."}), 400
         return jsonify({
             "valid": True,
             "community": {
@@ -768,12 +830,21 @@ def create_app(db_path: str = database.DEFAULT_DB_PATH) -> Flask:
 
     @app.route("/api/auth/demo", methods=["POST"])
     def auth_demo():
+        app_env = os.getenv("APP_ENV", "").strip().lower()
         demo_mode_active = os.getenv("DEMO_MODE", "0").lower() in ("1", "true")
-        if not demo_mode_active:
-            return jsonify({"error": "Demo login is disabled in production. DEMO_MODE=1 required."}), 403
+        if app_env == "production" or not demo_mode_active:
+            return jsonify({"error": "Demo login is disabled and refused in production. DEMO_MODE=1 required."}), 403
+        from backend.services.auth_service import create_access_token
+        token = create_access_token(
+            user_id="doc_demo",
+            role="doctor",
+            org_id="comm_demo",
+            email="demo@clinic.camp",
+            name="Dr. Priya (Demo)"
+        )
         return jsonify({
             "success": True,
-            "token": "demo_jwt_dr_priya",
+            "token": token,
             "doctor": {"id": "doc_demo", "full_name": "Dr. Priya (Demo)", "role": "doctor"},
             "community": {"id": "comm_demo", "name": "Rotary Community Health Outreach", "code": "CAMP-2026"}
         })
@@ -788,19 +859,27 @@ def create_app(db_path: str = database.DEFAULT_DB_PATH) -> Flask:
         password = data.get("password") or ""
         community_code = (data.get("community_code") or "").strip().upper() or "CAMP-2026"
 
+        app_env = os.getenv("APP_ENV", "development").strip().lower()
         demo_mode_active = os.getenv("DEMO_MODE", "0").lower() in ("1", "true")
         is_demo_req = bool(data.get("is_demo") or data.get("demo") or email == "demo@clinic.camp")
-        if is_demo_req and not demo_mode_active:
-            return jsonify({"error": "Demo login is disabled in production. DEMO_MODE=1 required."}), 403
+        if is_demo_req and (app_env == "production" or not demo_mode_active):
+            return jsonify({"error": "Demo login is disabled and refused in production. DEMO_MODE=1 required."}), 403
 
         comm = database.get_community_by_code(community_code, db_path=db_path)
         if not comm:
             return jsonify({"error": f"Invalid Community Code '{community_code}'. You can only log in with an active community invite code."}), 403
 
+        from backend.services.auth_service import create_access_token, verify_submitted_otp
+
         # Support Phone OTP / PIN login
         if phone:
-            if otp and otp not in ["123456", "1234"] and len(otp) < 4:
-                return jsonify({"error": "Invalid verification code. Use demo code 123456."}), 400
+            if otp:
+                if otp == "123456":
+                    if app_env != "development":
+                        return jsonify({"error": "Invalid verification code. DEV_OTP is only permitted in development.", "success": False}), 401
+                else:
+                    if not verify_submitted_otp(phone, otp):
+                        return jsonify({"error": "Invalid verification code.", "success": False}), 401
             if pin and len(pin) < 4:
                 return jsonify({"error": "PIN must be at least 4 digits."}), 400
 
@@ -822,9 +901,16 @@ def create_app(db_path: str = database.DEFAULT_DB_PATH) -> Flask:
                 pass
 
             profile = database.get_doctor_profile(doctor["id"], db_path=db_path)
+            token = create_access_token(
+                user_id=doctor["id"],
+                role=doctor.get("community_role", "doctor"),
+                org_id=comm["id"],
+                email=email,
+                name=doc_name
+            )
             return jsonify({
                 "success": True,
-                "token": f"jwt_phone_{doctor['id']}",
+                "token": token,
                 "doctor": profile,
                 "community": comm
             })
@@ -841,9 +927,16 @@ def create_app(db_path: str = database.DEFAULT_DB_PATH) -> Flask:
                 db_path=db_path
             )
             profile = database.get_doctor_profile(doctor["id"], db_path=db_path)
+            token = create_access_token(
+                user_id=doctor["id"],
+                role=doctor.get("community_role", "doctor"),
+                org_id=comm["id"],
+                email="doctor@clinic.camp",
+                name="Attending Physician"
+            )
             return jsonify({
                 "success": True,
-                "token": f"jwt_pin_{doctor['id']}",
+                "token": token,
                 "doctor": profile,
                 "community": comm
             })
@@ -867,10 +960,18 @@ def create_app(db_path: str = database.DEFAULT_DB_PATH) -> Flask:
             db_path=db_path
         )
         profile = database.get_doctor_profile(doctor["id"], db_path=db_path)
+        if not token:
+            token = create_access_token(
+                user_id=doctor["id"],
+                role=doctor.get("community_role", "doctor"),
+                org_id=comm["id"],
+                email=email,
+                name=doc_name
+            )
 
         return jsonify({
             "success": True,
-            "token": token or f"demo_jwt_{doctor['id']}",
+            "token": token,
             "doctor": profile,
             "community": comm
         })
