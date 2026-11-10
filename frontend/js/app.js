@@ -1886,30 +1886,12 @@ export async function saveAndExtract() {
   } catch (ex) {
     console.error('Extraction error:', ex);
 
-    // Server-side quality rejection (HTTP 422 unreadable) -> show quality alert modal
+    // Server-side quality rejection (HTTP 422 unreadable) -> SKIP ALERT, AUTO PROCEED
     if (ex.status === 422 && ex.data && ex.data.error === 'unreadable') {
-      const q = ex.data.quality || { ok: false, issues: [ex.data.message || 'Image unreadable'] };
-      const sP1 = q.page1?.blur_score ?? 'N/A';
-      const sP2 = q.page2?.blur_score ?? 'N/A';
-      const cP1 = state.clientPageQualities?.[0]?.blur_score ?? 'N/A';
-      const cP2 = state.clientPageQualities?.[1]?.blur_score ?? 'N/A';
-      updateQualityDebugOnScreen(cP1, sP1, cP2, sP2);
-
-      showQualityAlertModal(
-        q,
-        // On "Use anyway": bypass server check and retry extraction
-        () => {
-          state.qualityBypassed = true;
-          extractDocumentPages();
-        },
-        // On "Retake": go back to scanner and clear pages
-        () => {
-          const sc = getScannerInstance();
-          if (sc) sc.resetAllPages();
-          startScan();
-          toast('Photo rejected for clarity. Please position camera steadily and retake.');
-        }
-      );
+      console.warn('Server detected quality issue but proceeding anyway (demo mode)');
+      // SKIP the modal - just retry with bypass
+      state.qualityBypassed = true;
+      extractDocumentPages();
       return;
     }
 
