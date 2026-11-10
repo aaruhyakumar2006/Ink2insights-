@@ -18,7 +18,7 @@ logger = logging.getLogger("doc_scanner.supabase")
 class SupabaseService:
     def __init__(self, url: Optional[str] = None, key: Optional[str] = None):
         self.url = (url or os.getenv("SUPABASE_URL", "")).rstrip("/")
-        self.key = key or os.getenv("SUPABASE_KEY", "") or os.getenv("SUPABASE_ANON_KEY", "")
+        self.key = key or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "") or os.getenv("SUPABASE_KEY", "") or os.getenv("SUPABASE_ANON_KEY", "")
         self._circuit_open_until = 0.0
         self._failure_count = 0
         self._last_error = ""

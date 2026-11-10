@@ -53,8 +53,8 @@ PROVIDER_DEFAULTS = {
     "groq": {
         "name": "Groq Vision",
         "url": "https://api.groq.com/openai/v1/chat/completions",
-        "primary_model": os.getenv("GROQ_MODEL", "llama-3.2-11b-vision-preview"),
-        "fallback_model": os.getenv("GROQ_FALLBACK_MODEL", "llama-3.2-90b-vision-preview"),
+        "primary_model": os.getenv("GROQ_MODEL", "meta-llama/llama-3.2-11b-vision-instruct"),
+        "fallback_model": os.getenv("GROQ_FALLBACK_MODEL", "meta-llama/llama-3.2-90b-vision-instruct"),
         "price_in": 0.05,
         "price_out": 0.08,
         "fallback_price_in": 0.59,
@@ -97,8 +97,19 @@ PROVIDER_DEFAULTS = {
     "anthropic": {
         "name": "Anthropic Claude",
         "url": "https://api.anthropic.com/v1/messages",
-        "primary_model": os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022"),
-        "fallback_model": os.getenv("ANTHROPIC_FALLBACK_MODEL", "claude-3-5-sonnet-20241022"),
+        "primary_model": os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5-5"),
+        "fallback_model": os.getenv("ANTHROPIC_FALLBACK_MODEL", "claude-sonnet-5-5"),
+        "price_in": 3.00,
+        "price_out": 15.00,
+        "fallback_price_in": 3.00,
+        "fallback_price_out": 15.00,
+        "needs_stitch": False
+    },
+    "claude": {
+        "name": "Anthropic Claude",
+        "url": "https://api.anthropic.com/v1/messages",
+        "primary_model": os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5-5"),
+        "fallback_model": os.getenv("ANTHROPIC_FALLBACK_MODEL", "claude-sonnet-5-5"),
         "price_in": 3.00,
         "price_out": 15.00,
         "fallback_price_in": 3.00,
@@ -108,29 +119,39 @@ PROVIDER_DEFAULTS = {
 }
 
 
+def get_configured_ai_provider() -> str:
+    """Return the currently configured AI provider, strictly defaulting to 'gemini'.
+    Groq, NVIDIA, and Claude run ONLY when AI_PROVIDER explicitly names them.
+    """
+    prov = (os.getenv("AI_PROVIDER") or "gemini").strip().lower()
+    if prov in ("claude", "anthropic"):
+        return "claude"
+    if prov in ("groq", "nvidia", "gemini", "openai", "openrouter"):
+        return prov
+    return "gemini"
+
+
 def detect_ai_provider(
     api_key: Optional[str] = None,
     fallback: Optional[str] = None,
     preferred: Optional[str] = None
 ) -> str:
-    """Auto-detect AI provider from API key format.
+    """Auto-detect AI provider from explicit configuration or API key format.
     
-    Format patterns:
-    - nvapi-...          -> nvidia
-    - gsk_...            -> groq
-    - sk-ant-...         -> anthropic
-    - sk-or-...          -> openrouter
-    - AIzaSy... / AQ...  -> gemini
-    - sk-...             -> openai
+    Rule 9.1: AI_PROVIDER defaults to 'gemini' in code, even when NVIDIA_API_KEY
+    or other keys exist. Groq, NVIDIA and Claude run ONLY when AI_PROVIDER names them.
     """
     pref = (preferred or fallback or "").strip().lower()
+    if pref in PROVIDER_DEFAULTS:
+        return pref
+
     key = (api_key or "").strip()
     if key.startswith("nvapi-"):
         return "nvidia"
     if key.startswith("gsk_"):
         return "groq"
     if key.startswith("sk-ant-"):
-        return "anthropic"
+        return "claude"
     if key.startswith("sk-or-"):
         return "openrouter"
     if key.startswith("AIzaSy") or key.startswith("AQ.") or "generativelanguage" in key:
@@ -138,27 +159,11 @@ def detect_ai_provider(
     if key.startswith("sk-"):
         return "openai"
 
-    # Fallback to configured provider or environment setting
-    if fallback and fallback.lower() in PROVIDER_DEFAULTS:
-        return fallback.lower()
-    
-    env_provider = os.getenv("AI_PROVIDER", "").strip().lower()
-    if env_provider in PROVIDER_DEFAULTS:
-        return env_provider
+    configured = get_configured_ai_provider()
+    if configured in PROVIDER_DEFAULTS:
+        return configured
 
-    # Key availability checks
-    if os.getenv("NVIDIA_API_KEY"):
-        return "nvidia"
-    if os.getenv("GROQ_API_KEY"):
-        return "groq"
-    if os.getenv("GEMINI_API_KEY"):
-        return "gemini"
-    if os.getenv("OPENAI_API_KEY"):
-        return "openai"
-    if os.getenv("ANTHROPIC_API_KEY"):
-        return "anthropic"
-
-    return "nvidia"
+    return "gemini"
 
 
 def resolve_api_key_for_provider(provider: str, explicit_key: Optional[str] = None) -> str:
@@ -177,7 +182,7 @@ def resolve_api_key_for_provider(provider: str, explicit_key: Optional[str] = No
         return os.getenv("OPENAI_API_KEY", "").strip()
     if prov == "openrouter":
         return os.getenv("OPENROUTER_API_KEY", "").strip()
-    if prov == "anthropic":
+    if prov in ("anthropic", "claude"):
         return os.getenv("ANTHROPIC_API_KEY", "").strip()
     
     return ""
@@ -353,7 +358,7 @@ class UnifiedAIPipeline(AIService):
                     "responseMimeType": "application/json"
                 }
             }
-        elif self.provider == "anthropic":
+        elif self.provider in ("anthropic", "claude"):
             headers = {
                 "x-api-key": self.api_key,
                 "anthropic-version": "2023-06-01",
@@ -467,7 +472,7 @@ class UnifiedAIPipeline(AIService):
             tokens_in = usage.get("promptTokenCount", 0)
             tokens_out = usage.get("candidatesTokenCount", 0)
             tokens_think = usage.get("thinkingTokenCount", 0)
-        elif self.provider == "anthropic":
+        elif self.provider in ("anthropic", "claude"):
             content_list = res_json.get("content", [])
             raw_text = "".join(c.get("text", "") for c in content_list if c.get("type") == "text")
             usage = res_json.get("usage", {})

@@ -9,72 +9,45 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Bricolage+Grotesque:wght@600;700;800&display=swap" rel="stylesheet">
   <link rel="icon" type="image/png" href="assets/logo.png">
-  <link rel="stylesheet" href="css/styles.css?v=20261025_light_only">
+  <link rel="stylesheet" href="css/styles.css?v=professional_20261110">
+  <!-- Ink 2 Insight Full-Screen Brand Intro -->
+  <link rel="stylesheet" href="intro/intro.css?v=20261110">
+  <script src="intro/intro.js"></script>
+  <!-- Supabase JS Client for Auth -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script>
-    // Global skip hook for initial splash (delegates directly to app module)
+    // Global skip hook for the intro splash. Resolve directly to a landing transition
+    // so the intro callback does not recurse back into itself.
     window.finishSplash = function() {
-      if (window.app && typeof window.app.finishSplash === 'function') {
-        window.app.finishSplash();
+      const landing = document.getElementById('landing');
+      if (window.app && typeof window.app.go === 'function') {
+        window.app.go('landing');
+        return;
+      }
+      if (landing) {
+        document.querySelectorAll('.scr').forEach(s => {
+          s.classList.toggle('on', s.id === 'landing');
+        });
       }
     };
+    // Auto-purge stale service worker registrations and caches on startup to guarantee the freshest clinical UI.
+    if ('serviceWorker' in navigator && typeof caches !== 'undefined') {
+      navigator.serviceWorker.getRegistrations().then(regs => {
+        for (const reg of regs) {
+          reg.unregister();
+        }
+      }).catch(() => {});
+      caches.keys().then(keys => {
+        keys.forEach(k => {
+          if (k !== 'ink2i-v20261107_nav_fix') {
+            caches.delete(k);
+          }
+        });
+      }).catch(() => {});
+    }
   </script>
 </head>
 <body>
-
-  <!-- 1. FULL-SCREEN CLINICAL SPLASH SCREEN (Native Edge-to-Edge AI Scanner Intro) -->
-  <section id="splash">
-    <!-- Ambient Cyber-Clinical Lighting Auras -->
-    <div class="splash-ambient-aura pink"></div>
-    <div class="splash-ambient-aura teal"></div>
-    <div class="splash-ambient-aura violet"></div>
-    <div class="splash-grid-overlay"></div>
-
-    <!-- Top Clinical Status Pill -->
-    <div class="splash-top-bar">
-      <div class="splash-top-badge">
-        <span class="splash-badge-dot"></span>
-        <span id="splash-status-pill-text">CLINICAL VISION AI · INITIALIZING</span>
-      </div>
-    </div>
-
-    <!-- Center Logo Animation Stage (Pure High-Fidelity Optical Scanner Animation) -->
-    <div class="splash-stage">
-      <div class="splash-logo-card">
-        <!-- Target Scanner Corner Reticles -->
-        <span class="reticle-corner top-left"></span>
-        <span class="reticle-corner top-right"></span>
-        <span class="reticle-corner bottom-left"></span>
-        <span class="reticle-corner bottom-right"></span>
-
-        <!-- Dynamic Laser Scanning Line & Light Sheet -->
-        <div class="splash-laser-beam"></div>
-        <div class="splash-laser-sheen"></div>
-
-        <!-- High-Resolution Crisp Brand Logo -->
-        <img src="assets/logo.png" alt="Ink 2 Insight Logo" class="splash-logo-img" draggable="false" />
-      </div>
-    </div>
-
-    <!-- Bottom Progress & Telemetry Pipeline -->
-    <div class="splash-bottom-wrap">
-      <div class="splash-progress-track">
-        <div class="splash-progress-bar" id="splash-progress-bar"></div>
-      </div>
-
-      <div class="splash-status-row">
-        <span id="splash-status-text">Initializing Optical Vision AI Core...</span>
-        <span id="splash-pct">0%</span>
-      </div>
-
-      <!-- Bottom Compliance & Quick Skip -->
-      <div class="splash-bottom-bar">
-        <span class="splash-compliance-tag">🔒 DPDP Act 2023 · SaMD Protocol</span>
-        <button class="splash-skip-btn" onclick="event.stopPropagation(); window.finishSplash();" type="button">
-          Skip &rarr;
-        </button>
-      </div>
-    </div>
-  </section>
 
   <!-- Desktop Viewport Toggle Pill -->
   <button class="view-toggle-pill" id="view-toggle-btn" onclick="window.app ? window.app.toggleFrame() : null" title="Toggle phone frame / expanded view">
@@ -91,85 +64,193 @@
     </div>
 
     <!-- 2. LANDING SCREEN — INK 2 INSIGHT CLINICAL INTAKE -->
+    <!-- 2. LANDING SCREEN — INK 2 INSIGHT CLINICAL INTAKE -->
     <section class="scr on" id="landing">
-      <!-- Top Brand Navigation Bar -->
-      <div class="landing-nav">
-        <div class="landing-logo-group">
-          <img src="assets/logo.png" alt="Ink 2 Insight" class="landing-brand-logo-img" />
-          <div>
-            <div class="landing-logo-text">Ink 2 Insight</div>
-            <span class="landing-logo-sub">IDEAS TO IMPACT · CLINICAL INTAKE</span>
-          </div>
+      <!-- Top Sticky Navigation Header -->
+      <div class="landing-header">
+        <div class="landing-header-logo">
+          <img src="assets/logo.png" width="40" height="40" alt="Ink 2 Insight logo" style="border-radius: 12px;">
+          <div class="landing-header-title">Ink 2 Insight</div>
         </div>
-        <div style="display:flex;align-items:center;gap:8px;">
-          <button class="notif-bell-btn" style="width:36px;height:36px;border-radius:50%;cursor:pointer;" onclick="window.openAISettingsModal()" title="Unified AI Key Engine Settings" aria-label="AI Key Settings">
-            <span style="font-size:14px;">⚡</span>
-          </button>
-          <button class="landing-nav-btn" onclick="window.app.go('login')" id="landing-login-btn">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <button type="button" class="landing-nav-signin-btn" onclick="window.app.go('login')" id="landing-login-btn">
             Sign In
           </button>
         </div>
       </div>
 
-      <!-- Hero Header -->
-      <div class="landing-hero-box">
-        <h1 class="landing-headline">OPTICAL CLINICAL INTAKE FOR MEDICAL CAMPS</h1>
-        <p class="landing-subheadline">Transform paper screening forms into verified digital records with 3-second Vision AI OCR transcription.</p>
-      </div>
-
-      <!-- 2x2 Service Cards Grid (In Brand Theme) -->
-      <div class="landing-services-grid">
-        <!-- 1. OPTICAL SCAN -->
-        <div class="landing-service-card" onclick="window.app.go('login')" id="card-optical-scan">
-          <div class="landing-service-icon-wrap" style="background:#FCE4EC;color:#D81B60;">
-            <svg viewBox="0 0 24 24"><path d="M4 8V5a1 1 0 011-1h3M16 4h3a1 1 0 011 1v3M20 16v3a1 1 0 01-1 1h-3M8 20H5a1 1 0 01-1-1v-3M4 12h16"/></svg>
-          </div>
-          <b class="landing-service-title">OPTICAL SCAN</b>
-          <p class="landing-service-desc">Dual-page camp forms. Automatic alignment &amp; rapid OCR capture.</p>
-          <span class="landing-service-link">START SCAN &rarr;</span>
+      <!-- Hero Section -->
+      <div class="landing-hero-container">
+        <div class="landing-badge">
+          <span class="landing-badge-dot"></span>
+          <span>Healthcare Technology Platform</span>
         </div>
 
-        <!-- 2. AI EXTRACTION -->
-        <div class="landing-service-card" onclick="window.app.go('login')" id="card-ai-extract">
-          <div class="landing-service-icon-wrap" style="background:#FFF0F5;color:#E91E63;">
-            <svg viewBox="0 0 24 24"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
-          </div>
-          <b class="landing-service-title">AI EXTRACTION</b>
-          <p class="landing-service-desc">95 clinical indicators &amp; vitals extracted in 3 sec with 98.4% accuracy.</p>
-          <span class="landing-service-link">VIEW VITALS &rarr;</span>
-        </div>
+        <h1 class="landing-main-title">
+          Digital Patient Record<br>
+          <span class="landing-accent-text">Management System</span>
+        </h1>
 
-        <!-- 3. DOCTOR TRIAGE -->
-        <div class="landing-service-card" onclick="window.app.go('login')" id="card-doctor-triage">
-          <div class="landing-service-icon-wrap" style="background:#FEF3C7;color:#D97706;">
-            <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01"/></svg>
-          </div>
-          <b class="landing-service-title">DOCTOR TRIAGE</b>
-          <p class="landing-service-desc">Amber flags for low-confidence handwriting &amp; human physician sign-off.</p>
-          <span class="landing-service-link">TRIAGE QUEUE &rarr;</span>
-        </div>
-
-        <!-- 4. MIS WORKBOOK -->
-        <div class="landing-service-card" onclick="window.app.go('login')" id="card-mis-export">
-          <div class="landing-service-icon-wrap" style="background:#E9F4EE;color:#107C41;">
-            <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M7 8h10M7 12h10M7 16h6"/></svg>
-          </div>
-          <b class="landing-service-title">MIS WORKBOOK</b>
-          <p class="landing-service-desc">Multi-sheet Excel export with automated formulas &amp; camp analytics.</p>
-          <span class="landing-service-link">EXPORT EXCEL &rarr;</span>
-        </div>
-      </div>
-
-      <!-- Action Buttons Stack -->
-      <div class="landing-cta-container">
-        <button class="landing-primary-btn" onclick="window.app.go('login')">
-          <span>Start Document Intake</span>
-          <svg viewBox="0 0 24 24" style="width:18px;height:18px;"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </button>
-        <p class="landing-compliance-note">
-          🔒 DPDP Act 2023 · ISO 27001 · SaMD Human-in-the-Loop Oversight
+        <p class="landing-hero-desc">
+          Enterprise-grade clinical data digitization platform for healthcare organizations. Convert paper-based medical records into structured digital format with AI-assisted validation and physician oversight.
         </p>
+
+        <div class="landing-cta-stack">
+          <button type="button" class="landing-btn-primary" onclick="window.app.go('login')" style="display:flex;align-items:center;justify-content:center;gap:8px;">
+            <span>Access Platform</span>
+          </button>
+          <div style="display:flex;gap:10px;">
+            <button type="button" class="landing-btn-secondary" style="flex:1;min-height:48px;" onclick="window.app.loginDemo()">
+              View Demo
+            </button>
+            <button type="button" class="landing-btn-secondary" style="flex:1;min-height:48px;" onclick="document.getElementById('how-it-works-anchor').scrollIntoView({behavior:'smooth'})">
+              Learn More
+            </button>
+          </div>
+        </div>
+
+        <!-- Scanning Document Graphic with Animated Laser -->
+        <div class="landing-graphic-wrap">
+          <div class="landing-paper-card">
+            <div class="landing-paper-bar" style="width:60%;height:12px;background:#0F1B2D;border-radius:6px;"></div>
+            <div class="landing-paper-bar" style="width:90%;"></div>
+            <div class="landing-paper-bar" style="width:75%;"></div>
+            <div class="landing-paper-bar" style="width:85%;"></div>
+            <div style="height:1px;background:#F0E3E8;margin:4px 0;"></div>
+            <div class="landing-paper-bar" style="width:70%;"></div>
+            <div class="landing-paper-bar" style="width:92%;"></div>
+            <div class="landing-paper-bar" style="width:55%;"></div>
+            <div class="landing-paper-bar" style="width:80%;"></div>
+            <div class="landing-paper-laser"></div>
+          </div>
+
+          <div class="landing-status-pill pill-top">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0E6B3D" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>
+            <span>Name read</span>
+          </div>
+
+          <div class="landing-status-pill pill-mid">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0E6B3D" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>
+            <span>Vitals read</span>
+          </div>
+
+          <div class="landing-status-pill pill-bottom">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8A4B00" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l10 18H2z"></path><path d="M12 10v5M12 18v.5"></path></svg>
+            <span>Doctor to check</span>
+          </div>
+        </div>
       </div>
+
+      <!-- Trust Bar -->
+      <div class="landing-trust-bar">
+        <div class="landing-trust-item">HIPAA Compliant</div>
+        <div class="landing-trust-divider"></div>
+        <div class="landing-trust-item">Enterprise Security</div>
+        <div class="landing-trust-divider"></div>
+        <div class="landing-trust-item">Data Privacy Protected</div>
+      </div>
+
+      <!-- How It Works Section -->
+      <div id="how-it-works-anchor" class="landing-section-how">
+        <div class="landing-sub-label">System Overview</div>
+        <h2 class="landing-section-title">Clinical Workflow Process</h2>
+        <div class="landing-steps-list">
+          <div class="landing-step-row">
+            <div class="landing-step-num">1</div>
+            <div class="landing-step-body">
+              <div class="landing-step-title">Document Capture</div>
+              <p class="landing-step-desc">High-resolution optical scanning of patient intake forms with automated quality validation and error detection.</p>
+            </div>
+          </div>
+          <div class="landing-step-row">
+            <div class="landing-step-num">2</div>
+            <div class="landing-step-body">
+              <div class="landing-step-title">AI-Assisted Extraction</div>
+              <p class="landing-step-desc">Intelligent optical character recognition extracts structured clinical data with confidence scoring and validation markers.</p>
+            </div>
+          </div>
+          <div class="landing-step-row">
+            <div class="landing-step-num">3</div>
+            <div class="landing-step-body">
+              <div class="landing-step-title">Physician Verification</div>
+              <p class="landing-step-desc">Licensed medical professionals review flagged entries and authorize final record submission with digital signature.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Built for the Camp Feature Cards -->
+      <div class="landing-section-features">
+        <div class="landing-sub-label">Enterprise Features</div>
+        <h2 class="landing-section-title" style="margin-bottom:8px;">Comprehensive Healthcare Solution</h2>
+
+        <div class="landing-feature-card">
+          <div class="landing-feature-ico" style="background:#E8EAF6;">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#3F51B5" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V5a1 1 0 011-1h3M16 4h3a1 1 0 011 1v3M20 16v3a1 1 0 01-1 1h-3M8 20H5a1 1 0 01-1-1v-3M4 12h16"></path></svg>
+          </div>
+          <div class="landing-feature-title">Optical Document Scanning</div>
+          <p class="landing-feature-desc">Professional-grade image acquisition with multi-page support and automated quality assurance protocols.</p>
+        </div>
+
+        <div class="landing-feature-card">
+          <div class="landing-feature-ico" style="background:#E8F5E9;">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#2E7D32" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h14v16H5z"></path><path d="M9 9h6M9 13h6M9 17h3"></path></svg>
+          </div>
+          <div class="landing-feature-title">Intelligent Data Extraction</div>
+          <p class="landing-feature-desc">Advanced machine learning algorithms process handwritten medical forms with 95%+ field accuracy and confidence metrics.</p>
+        </div>
+
+        <div class="landing-feature-card">
+          <div class="landing-feature-ico" style="background:#FFF3E0;">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#EF6C00" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          </div>
+          <div class="landing-feature-title">Clinical Oversight</div>
+          <p class="landing-feature-desc">Mandatory physician review and approval workflow ensures medical accuracy and regulatory compliance.</p>
+        </div>
+
+        <div class="landing-feature-card">
+          <div class="landing-feature-ico" style="background:#E0F2F1;">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#00695C" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 10h18M9 4v16"></path></svg>
+          </div>
+          <div class="landing-feature-title">Data Export & Integration</div>
+          <p class="landing-feature-desc">Structured data output in industry-standard formats compatible with existing healthcare information systems.</p>
+        </div>
+      </div>
+
+      <!-- The Right View for Every Role -->
+      <div class="landing-section-roles">
+        <h2 class="landing-section-title">The right view for every role</h2>
+        <div class="landing-roles-stack">
+          <div class="landing-role-card">
+            <div class="landing-role-name">Field worker</div>
+            <p class="landing-role-desc">A scan-first home screen. Capture forms and fix identity details.</p>
+          </div>
+          <div class="landing-role-card">
+            <div class="landing-role-name">Doctor</div>
+            <p class="landing-role-desc">Review flagged fields, edit clinical details and approve records.</p>
+          </div>
+          <div class="landing-role-card">
+            <div class="landing-role-name">Admin</div>
+            <p class="landing-role-desc">Manage your team, usage and exports for the whole camp.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Ready for your next camp? Sign in CTA -->
+      <div class="landing-cta-banner">
+        <h2 class="landing-cta-title">Ready for your next camp?</h2>
+        <p class="landing-cta-desc">Sign in to scan forms, review records and export your camp data.</p>
+        <button type="button" class="landing-btn-banner" onclick="window.app.go('login')">
+          Sign in
+        </button>
+      </div>
+
+      <!-- Footer -->
+      <footer class="landing-footer">
+        <div class="landing-footer-brand">Ink 2 Insight</div>
+        <div class="landing-footer-sub">Ideas to Impact · Clinical Intake</div>
+        <div class="landing-footer-copy">© 2026 Ink 2 Insight</div>
+      </footer>
     </section>
 
     <!-- 3. SIGN IN SCREEN (Reference: Saad Shaikh Elegant Topographic Pink Wave) -->
@@ -211,60 +292,59 @@
           <div class="signin-title-underline"></div>
         </div>
 
-        <!-- 3 Auth Tabs: Phone OTP, Quick PIN, Email -->
+        <!-- 2 Auth Tabs: Email and Doctor PIN -->
         <div class="signin-tabs">
-          <button type="button" class="signin-tab-btn active" id="auth-tab-btn-otp" onclick="window.app.switchAuthTab('otp')">
-            <svg viewBox="0 0 24 24" style="width:14px;height:14px;"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
-            Phone OTP
+          <button type="button" class="signin-tab-btn active" id="auth-tab-btn-email" onclick="window.app.switchAuthTab('email')">
+            <svg viewBox="0 0 24 24" style="width:14px;height:14px;"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+            Email
           </button>
           <button type="button" class="signin-tab-btn" id="auth-tab-btn-pin" onclick="window.app.switchAuthTab('pin')">
             <svg viewBox="0 0 24 24" style="width:14px;height:14px;"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
             Doctor PIN
           </button>
-          <button type="button" class="signin-tab-btn" id="auth-tab-btn-email" onclick="window.app.switchAuthTab('email')">
-            <svg viewBox="0 0 24 24" style="width:14px;height:14px;"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-            Email
-          </button>
         </div>
 
-        <!-- 1. PHONE OTP FORM -->
-        <form id="auth-form-otp" onsubmit="event.preventDefault(); window.app.loginWithOtp();">
+        <!-- 1. EMAIL / PASSWORD FORM -->
+        <form id="auth-form-email" onsubmit="event.preventDefault(); window.app.login();">
           <div class="signin-form-group">
-            <label class="signin-label" for="login-phone">Mobile Phone</label>
-            <div class="signin-otp-split">
-              <div class="signin-input-wrap">
-                <svg class="signin-input-icon" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 16.92z"/></svg>
-                <input id="login-phone" type="tel" placeholder="98765 43210" required />
-              </div>
-              <button type="button" class="signin-otp-btn" id="btn-request-otp" onclick="window.app.requestOtp()">
-                Send OTP
+            <label class="signin-label" for="login-email">Email</label>
+            <div class="signin-input-wrap">
+              <svg class="signin-input-icon" viewBox="0 0 24 24"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+              <input id="login-email" type="email" placeholder="physician@hospital.org" autocomplete="email" required />
+            </div>
+          </div>
+
+          <div class="signin-form-group">
+            <label class="signin-label" for="login-password">Password</label>
+            <div class="signin-input-wrap">
+              <svg class="signin-input-icon" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+              <input id="login-password" type="password" placeholder="Enter your password" autocomplete="current-password" required />
+              <button type="button" class="signin-pwd-toggle" onclick="const p=document.getElementById('login-password'); p.type = p.type==='password'?'text':'password';" aria-label="Toggle password visibility">
+                <svg viewBox="0 0 24 24" style="width:16px;height:16px;"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
               </button>
             </div>
           </div>
 
-          <div class="signin-form-group" id="otp-entry-group" style="display:none;">
-            <label class="signin-label" for="login-otp">6-Digit Verification Code</label>
-            <div class="signin-input-wrap">
-              <svg class="signin-input-icon" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
-              <input id="login-otp" type="text" placeholder="123456" maxlength="6" autocomplete="one-time-code" />
-            </div>
-            <div class="field-hint-chip">
-              <span>⚡ Field Test Code: <b>123456</b></span>
-            </div>
-          </div>
-
           <div class="signin-form-group">
-            <label class="signin-label" for="login-comm-code-otp">Community Invite Code</label>
+            <label class="signin-label" for="login-comm-code-email">Community Invite Code</label>
             <div class="signin-input-wrap">
-              <svg class="signin-input-icon" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
-              <input id="login-comm-code-otp" type="text" value="CAMP-2026" placeholder="CAMP-2026" uppercase required />
+              <svg class="signin-input-icon" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+              <input id="login-comm-code-email" type="text" value="CAMP-2026" placeholder="CAMP-2026" uppercase required />
             </div>
           </div>
 
-          <p class="err" id="login-otp-error" style="margin-bottom:8px;"></p>
+          <p class="err" id="login-error" style="margin-bottom:8px;"></p>
 
-          <button type="submit" class="signin-submit-btn" id="login-otp-submit-btn">
-            Sign In with Phone
+          <div class="signin-meta-row">
+            <label class="signin-remember-wrap">
+              <input type="checkbox" id="login-remember" checked />
+              <span>Remember Me</span>
+            </label>
+            <a href="#" class="signin-forgot-link" onclick="event.preventDefault(); window.app.forgotPassword();">Forgot Password?</a>
+          </div>
+
+          <button type="submit" class="signin-submit-btn" id="login-submit-btn">
+            Login with Email
           </button>
         </form>
 
@@ -391,6 +471,40 @@
       </div>
 
       <div class="body" id="home-body">
+        <!-- FIELD WORKER SCAN-FIRST HERO (Rule 4.7) -->
+        <div id="worker-home-section" style="display:none;margin-bottom:16px;">
+          <div style="background:linear-gradient(135deg, #0d9488 0%, #047857 100%);color:#fff;border-radius:20px;padding:22px 18px;text-align:center;box-shadow:0 8px 24px rgba(13,148,136,0.25);">
+            <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1px;opacity:0.9;margin-bottom:12px;">Field Worker Quick Intake</div>
+            <button id="worker-large-scan-btn" onclick="window.app.startScan()" style="width:100%;background:#fff;color:#047857;border:none;border-radius:16px;padding:18px 20px;font-size:17px;font-weight:800;display:flex;align-items:center;justify-content:center;gap:10px;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,0.12);">
+              <svg viewBox="0 0 24 24" style="width:24px;height:24px;stroke:#047857;fill:none;stroke-width:2.5;"><path d="M4 8V5a1 1 0 011-1h3M16 4h3a1 1 0 011 1v3M20 16v3a1 1 0 01-1 1h-3M8 20H5a1 1 0 01-1-1v-3M4 12h16"/></svg>
+              <span>Scan Patient Document</span>
+            </button>
+            <div style="display:flex;justify-content:space-around;margin-top:16px;padding-top:14px;border-top:1px solid rgba(255,255,255,0.25);">
+              <div>
+                <div style="font-size:26px;font-weight:800;" id="worker-my-scans-count">0</div>
+                <div style="font-size:11px;opacity:0.9;">My Scans Today</div>
+              </div>
+              <div>
+                <div style="font-size:26px;font-weight:800;color:#FDE68A;" id="worker-retake-count">0</div>
+                <div style="font-size:11px;opacity:0.9;">Needs Retake</div>
+              </div>
+            </div>
+          </div>
+
+          <div style="margin-top:16px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+              <b style="font-size:15px;color:var(--ink);">My Records Needing Retake</b>
+              <small style="color:var(--mute);font-size:12px;" id="worker-retake-sub">0 pending</small>
+            </div>
+            <div id="worker-retake-list" style="display:flex;flex-direction:column;gap:8px;">
+              <div style="padding:16px;text-align:center;color:var(--mute);background:#fff;border-radius:14px;border:1px solid var(--line);font-size:13px;">
+                🎉 All your captured scans are clear! No retakes required.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="doctor-home-section">
         <!-- Active Camp Dark Hero Banner -->
         <div class="active-camp-banner" id="active-camp-card" onclick="window.app.openCampPicker()">
           <div class="hero-ring" id="home-ring" style="--p:0;">
@@ -582,6 +696,7 @@
         <div id="recent-records-list">
           <!-- Rendered via JS -->
         </div>
+        </div> <!-- /#doctor-home-section -->
       </div>
 
       <!-- Floating Frosted Glass Bottom Navigation -->
@@ -660,7 +775,6 @@
       <div class="scan-utils-bar">
         <input type="file" id="camera-photo-input" accept="image/*" capture="environment" style="display:none;" onchange="window.app.onFileUploaded(event)">
         <input type="file" id="camera-gallery-input" accept="image/*" style="display:none;" onchange="window.app.onFileUploaded(event)">
-        <input type="file" id="camera-file-input" accept="image/*" capture="environment" style="display:none;" onchange="window.app.onFileUploaded(event)">
         <button type="button" class="btn ghost" id="btn-take-photo" onclick="window.app.takePhotoWithCamera()">
           <svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
           Take Photo
@@ -692,8 +806,12 @@
         <p style="color:var(--mute);margin-top:10px;">Verify both captured pages belong to the same patient.</p>
         
         <div class="pair">
-          <div class="sheet" id="pairs-p1-preview" data-t="Page 1: Vitals & Details"></div>
-          <div class="sheet" id="pairs-p2-preview" data-t="Page 2: Exam & Referral"></div>
+          <div class="sheet" id="pairs-p1-preview" data-t="Page 1: Vitals & Details" style="position:relative;">
+            <span id="pairs-t1-badge" class="tag" style="display:none;position:absolute;top:8px;left:8px;background:rgba(14,124,107,0.9);color:#fff;font-size:11px;font-weight:700;z-index:2;padding:3px 8px;border-radius:6px;box-shadow:0 2px 4px rgba(0,0,0,0.15);"></span>
+          </div>
+          <div class="sheet" id="pairs-p2-preview" data-t="Page 2: Exam & Referral" style="position:relative;">
+            <span id="pairs-t2-badge" class="tag" style="display:none;position:absolute;top:8px;left:8px;background:rgba(14,124,107,0.9);color:#fff;font-size:11px;font-weight:700;z-index:2;padding:3px 8px;border-radius:6px;box-shadow:0 2px 4px rgba(0,0,0,0.15);"></span>
+          </div>
         </div>
 
         <button type="button" class="btn ghost" id="pairs-swap-btn" style="margin:8px 0 12px;display:flex;align-items:center;justify-content:center;gap:8px;font-weight:700;color:var(--teal);border-color:var(--teal);" onclick="window.app.swapScanPages()">
@@ -709,6 +827,15 @@
           <button type="button" class="btn" style="background:#D97706;color:#fff;padding:6px 14px;font-size:11.5px;font-weight:700;width:auto;" onclick="window.app.swapScanPages()">
             🔀 Swap Slots Now
           </button>
+        </div>
+
+        <div id="pairs-family-warning" style="display:none;background:#FEF2F2;border:1.5px solid #EF4444;border-radius:12px;padding:12px 14px;margin-bottom:12px;color:#991B1B;font-size:12.5px;">
+          <div style="font-weight:700;display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+            <span>⚠️</span> Mismatched Form Family Warning
+          </div>
+          <p id="pairs-family-warning-msg" style="margin:0;font-size:12px;color:#7F1D1D;line-height:1.4;">
+            Page 1 and Page 2 appear to be from different form families. Verify both pages belong to the same patient form set before transcribing.
+          </p>
         </div>
 
         <label for="pairs-camp-input" style="font-weight:700;color:var(--ink);font-size:13.5px;display:flex;justify-content:space-between;align-items:center;">
@@ -769,6 +896,12 @@
             </div>
           </div>
 
+          <!-- Concurrency Review Lock Warning Banner -->
+          <div id="review-lock-alert" style="display:none;background:#FEF2F2;border:1px solid #DC2626;border-radius:10px;padding:9px 12px;margin-top:10px;align-items:center;gap:8px;color:#991B1B;font-size:12px;">
+            <span style="font-size:16px;">🔒</span>
+            <span id="review-lock-msg">This record is currently locked for review by another physician.</span>
+          </div>
+
           <!-- Collapsible Scanned Document Previews -->
           <div id="review-docs-box" style="display:none;margin-top:12px;border-top:1px solid var(--line);padding-top:10px;">
             <div style="display:flex;gap:8px;">
@@ -792,6 +925,20 @@
 
         <!-- Clinical Decision Support & Triage Alerts -->
         <div id="review-clinical-alerts" style="display:none; flex-direction:column; gap:8px; margin-bottom:14px;">
+          <!-- Duplicate Patient Registration Alert Banner -->
+          <div id="alert-duplicate-patient" style="display:none; background:#FFFBEB; border-left:4px solid #F59E0B; border-radius:10px; padding:10px 14px; box-shadow:0 1px 3px rgba(0,0,0,0.05);">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span style="font-size:16px;">👥</span>
+                <b style="font-size:13px; color:#92400E;">Potential Duplicate Intake Detected</b>
+              </div>
+              <span class="tag" style="background:#FDE68A; color:#92400E; font-size:10.5px; font-weight:700;">Same Camp Match</span>
+            </div>
+            <p id="alert-duplicate-patient-msg" style="font-size:12px; color:#78350F; margin:4px 0 0; line-height:1.4;">
+              A patient with this name was already scanned in this outreach camp today.
+            </p>
+          </div>
+
           <!-- High BMI Alert Banner -->
           <div id="alert-high-bmi" style="display:none; background:#FEF2F2; border-left:4px solid #DC2626; border-radius:10px; padding:10px 14px; box-shadow:0 1px 3px rgba(0,0,0,0.05);">
             <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -853,7 +1000,7 @@
         </div>
 
         <!-- 8-Section Category Tabs -->
-        <div class="review-tabs">
+        <div class="review-tabs" id="static-review-tabs">
           <button class="review-tab-btn active" id="rtab-personal" onclick="window.app.switchReviewTab('personal')">1. Personal & Vitals</button>
           <button class="review-tab-btn" id="rtab-medical" onclick="window.app.switchReviewTab('medical')">2. Medical History</button>
           <button class="review-tab-btn" id="rtab-family" onclick="window.app.switchReviewTab('family')">3. Family History</button>
@@ -862,6 +1009,9 @@
           <button class="review-tab-btn" id="rtab-vision" onclick="window.app.switchReviewTab('vision')">6. Vision & Dental</button>
           <button class="review-tab-btn" id="rtab-referral" onclick="window.app.switchReviewTab('referral')">7. Referral & Sign</button>
         </div>
+
+        <!-- Dynamic Template UI Tabs (gated by USE_TEMPLATE_UI=1) -->
+        <div class="review-tabs" id="dynamic-review-tabs" style="display:none;"></div>
 
         <!-- Section 1: Personal Information & Vitals -->
         <div class="review-section active" id="rsec-personal">
@@ -959,6 +1109,72 @@
               <span style="font-size:12px; font-weight:700; color:#475569;">Live BMI Calculator:</span>
             </div>
             <span id="rev-calculated-bmi" style="font-size:12px; font-weight:800; color:#0284C7; background:#E0F2FE; padding:3px 10px; border-radius:12px;">-- kg/m²</span>
+          </div>
+
+          <!-- PAEDIATRIC GROWTH & IAP PERCENTILE PANEL (Active for Age < 18 or School Health) -->
+          <div id="paediatric-growth-card" style="display:none; background:linear-gradient(135deg, #FAF5FF 0%, #F3E8FF 100%); border:1.5px solid #C084FC; border-radius:14px; padding:12px 14px; margin-bottom:14px; box-shadow:0 2px 4px rgba(124,58,237,0.06);">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span style="font-size:18px;">🧒</span>
+                <div>
+                  <b style="font-size:13px; color:#581C87;">Paediatric Screening Engine (IAP 2015 / WHO)</b>
+                  <small style="display:block; font-size:11px; color:#7E22CE;" id="paediatric-growth-subtitle">Age- & Sex-adjusted Growth Monitoring</small>
+                </div>
+              </div>
+              <span class="tag" id="paediatric-status-pill" style="background:#7C3AED; color:#ffffff; font-size:11px; font-weight:700;">Paediatric Mode</span>
+            </div>
+
+            <!-- Grid: BMI Percentile & BP Percentile -->
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:8px;">
+              <!-- 1. IAP BMI-for-Age Centile -->
+              <div style="background:#ffffff; border:1px solid #E9D5FF; border-radius:10px; padding:10px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                  <small style="font-size:11px; font-weight:700; color:#6B21A8; text-transform:uppercase;">BMI-for-Age (IAP)</small>
+                  <b id="paediatric-bmi-centile-badge" style="font-size:12px; color:#7C3AED;">-- th Centile</b>
+                </div>
+                <div id="paediatric-nutrition-category" style="font-size:13px; font-weight:800; color:#1E293B; margin-top:4px;">
+                  Normal Weight
+                </div>
+                <!-- Visual Centile Progress Bar -->
+                <div style="background:#F1F5F9; border-radius:6px; height:8px; overflow:hidden; margin-top:6px; position:relative;">
+                  <div id="paediatric-centile-progress" style="width:50%; height:100%; background:linear-gradient(90deg, #F59E0B 0%, #10B981 30%, #10B981 70%, #EF4444 100%); transition:width 0.3s ease;"></div>
+                </div>
+                <div style="display:flex; justify-content:space-between; font-size:9.5px; color:#94A3B8; margin-top:3px;">
+                  <span>&lt;3rd (SAM)</span>
+                  <span>15th-85th</span>
+                  <span>&gt;95th (Obese)</span>
+                </div>
+              </div>
+
+              <!-- 2. Paediatric BP-for-Height Centile -->
+              <div style="background:#ffffff; border:1px solid #E9D5FF; border-radius:10px; padding:10px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                  <small style="font-size:11px; font-weight:700; color:#6B21A8; text-transform:uppercase;">BP Staging (AAP/IAP)</small>
+                  <span class="tag" id="paediatric-bp-stage-pill" style="font-size:10.5px; font-weight:700; background:#ECFDF5; color:#059669;">Normal BP</span>
+                </div>
+                <div id="paediatric-bp-reference-info" style="font-size:11.5px; color:#475569; margin-top:6px; line-height:1.3;">
+                  Ref 90th / 95th: <b id="paediatric-bp-thresholds">--/-- mmHg</b>
+                </div>
+                <small id="paediatric-bp-clinical-note" style="display:block; font-size:10.5px; color:#64748B; margin-top:4px;">
+                  Within normal limits for age and height.
+                </small>
+              </div>
+            </div>
+
+            <!-- Adams Forward Bend Test (ATR) Scoliosis Row -->
+            <div style="display:flex; align-items:center; justify-content:space-between; background:#ffffff; border:1px solid #E9D5FF; border-radius:10px; padding:8px 12px; margin-top:10px;">
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span style="font-size:15px;">📐</span>
+                <div>
+                  <small style="font-size:11px; font-weight:700; color:#6B21A8; text-transform:uppercase;">Adams Forward Bend Test (ATR):</small>
+                  <span id="paediatric-atr-alert-badge" class="tag" style="display:none; font-size:10.5px; background:#FEF3C7; color:#92400E; margin-left:6px;">Scoliosis Review (&ge;5&deg;)</span>
+                </div>
+              </div>
+              <div style="display:flex; align-items:center; gap:6px;">
+                <input id="rev-atr" type="number" step="0.5" placeholder="0" oninput="window.app.onVitalsChanged()" style="width:65px; height:30px; font-size:12px; text-align:center; padding:0 4px; border:1px solid #CBD5E1; border-radius:6px; background:#fff;">
+                <span style="font-size:12px; font-weight:700; color:#64748B;">&deg;</span>
+              </div>
+            </div>
           </div>
 
           <div class="form-grid">
@@ -1160,6 +1376,9 @@
             <b>SaMD Compliance:</b> Automated OCR extraction is assistive and requires physician verification before export or prescription dispatch.
           </div>
         </div>
+
+        <!-- Dynamic Template UI Content Container (gated by USE_TEMPLATE_UI=1) -->
+        <div id="dynamic-review-content" style="display:none;"></div>
 
         <!-- Fixed Action Button -->
         <div style="margin-top:20px;padding-bottom:10px;">
@@ -1388,8 +1607,16 @@
       </div>
 
       <div class="body">
-        <h2 style="font-size:22px;margin:14px 0 4px;">Clinical Telemetry</h2>
-        <p style="color:var(--mute);margin-bottom:14px;font-size:13px;">Aggregated physiological vitals and referral pathways across all screened patients.</p>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin:14px 0 6px;">
+          <div>
+            <h2 style="font-size:20px;margin:0;color:var(--ink);">Clinical Telemetry</h2>
+            <small style="color:var(--mute);font-size:12px;">Aggregated physiological vitals &amp; prevalence indicators</small>
+          </div>
+          <!-- Camp Filter Dropdown -->
+          <select id="analytics-camp-select" onchange="window.app.onAnalyticsCampChanged()" style="max-width:180px;height:36px;font-size:12px;padding:0 8px;border-radius:10px;border:1.5px solid #CBD5E1;background:#fff;font-weight:600;">
+            <option value="">All Outreach Camps</option>
+          </select>
+        </div>
 
         <!-- Blood Pressure Classification -->
         <div class="clinical-card">
@@ -1519,25 +1746,77 @@
 
       <div class="body">
         <!-- Doctor Profile Card -->
-        <div class="clinical-card" style="padding:18px;margin:14px 0 12px;display:flex;align-items:center;gap:14px;">
-          <div class="av" id="settings-doctor-av" style="width:54px;height:54px;font-size:20px;background:linear-gradient(135deg, #D81B60 0%, #AD1457 100%);">D</div>
-          <div style="flex:1;">
-            <b id="settings-doctor-name" style="font-size:17px;color:var(--ink);">Attending Physician</b>
-            <p id="settings-doctor-email" style="color:var(--mute);font-size:12.5px;margin-top:2px;">physician@hospital.org</p>
-            <span class="tag" id="settings-community-name" style="background:var(--primary-light);color:var(--primary);font-size:10.5px;margin-top:4px;display:inline-block;">Primary Healthcare Outreach</span>
+        <div class="clinical-card" style="padding:18px;margin:14px 0 12px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;">
+            <div style="display:flex;align-items:center;gap:14px;">
+              <div class="av" id="settings-doctor-av" style="width:54px;height:54px;font-size:20px;background:linear-gradient(135deg, #D81B60 0%, #AD1457 100%);">D</div>
+              <div>
+                <b id="settings-doctor-name" style="font-size:17px;color:var(--ink);">Attending Physician</b>
+                <p id="settings-doctor-email" style="color:var(--mute);font-size:12.5px;margin-top:2px;">physician@hospital.org</p>
+                <div style="display:flex;align-items:center;gap:6px;margin-top:4px;">
+                  <span class="tag" id="settings-doctor-spec" style="background:#F0FDF4;color:#16A34A;font-size:11px;font-weight:700;">General Physician</span>
+                  <span class="tag" id="settings-community-name" style="background:var(--primary-light);color:var(--primary);font-size:10.5px;">Primary Healthcare Outreach</span>
+                </div>
+              </div>
+            </div>
+            <button class="btn ghost" style="width:auto;padding:6px 12px;font-size:12px;border:1px solid #CBD5E1;" onclick="window.app.toggleEditDoctorProfile()">
+              ✏️ Edit
+            </button>
+          </div>
+
+          <!-- Doctor Stats Counter Pill -->
+          <div style="display:grid;grid-template-columns:repeat(3, 1fr);gap:8px;text-align:center;background:#F8FAFC;border:1px solid #E2E8F0;border-radius:12px;padding:10px 6px;margin-top:14px;">
+            <div>
+              <small style="color:#64748B;font-size:11px;display:block;">Documents Scanned</small>
+              <b id="settings-doctor-scans" style="font-size:15px;color:#0F172A;">0</b>
+            </div>
+            <div>
+              <small style="color:#64748B;font-size:11px;display:block;">Verified &amp; Approved</small>
+              <b id="settings-doctor-reviews" style="font-size:15px;color:#16A34A;">0</b>
+            </div>
+            <div>
+              <small style="color:#64748B;font-size:11px;display:block;">Camps Served</small>
+              <b id="settings-doctor-camps" style="font-size:15px;color:#D81B60;">0</b>
+            </div>
+          </div>
+
+          <!-- Doctor Profile Edit Drawer (Collapsible) -->
+          <div id="settings-profile-edit-box" style="display:none;margin-top:14px;border-top:1px solid #E2E8F0;padding-top:12px;">
+            <b style="font-size:13px;color:#0F172A;display:block;margin-bottom:8px;">Update Physician Credentials</b>
+            <div style="display:flex;flex-direction:column;gap:8px;">
+              <div>
+                <label style="font-size:11px;font-weight:700;color:#64748B;">Full Physician Name:</label>
+                <input id="settings-input-name" style="font-size:13px;padding:8px 10px;height:36px;border-radius:8px;border:1px solid #CBD5E1;width:100%;margin-top:3px;" placeholder="Dr. First Last">
+              </div>
+              <div>
+                <label style="font-size:11px;font-weight:700;color:#64748B;">Specialization / Role:</label>
+                <input id="settings-input-spec" style="font-size:13px;padding:8px 10px;height:36px;border-radius:8px;border:1px solid #CBD5E1;width:100%;margin-top:3px;" placeholder="e.g. Lead Camp Physician, Paediatrician">
+              </div>
+              <div style="display:flex;gap:8px;margin-top:6px;">
+                <button class="btn" style="flex:1;height:36px;font-size:12.5px;padding:0;" onclick="window.app.saveDoctorProfile()">
+                  💾 Save Profile Changes
+                </button>
+                <button class="btn ghost" style="width:auto;height:36px;font-size:12px;padding:0 14px;border:1px solid #CBD5E1;" onclick="window.app.toggleEditDoctorProfile()">
+                  Cancel
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 
         <!-- Community Workspace Card -->
-        <div class="clinical-card-alt" style="border:1.5px solid var(--line);">
+        <div class="clinical-card-alt" style="border:1.5px solid var(--line);margin-bottom:12px;">
           <div style="display:flex;justify-content:space-between;align-items:center;">
-            <small style="color:var(--primary);text-transform:uppercase;font-size:10.5px;font-weight:700;">Clinical Workspace</small>
+            <small style="color:var(--primary);text-transform:uppercase;font-size:10.5px;font-weight:700;">Clinical Workspace &amp; Team</small>
             <span class="tag" style="background:var(--ok);color:var(--ok-text);font-size:10.5px;">Active Workspace</span>
           </div>
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;">
-            <b id="settings-hub-title" style="font-size:15px;color:var(--ink);">Mobile Health Camp Unit</b>
-            <button class="btn ghost" style="width:auto;padding:4px 10px;font-size:11.5px;background:var(--card);color:var(--ink);" onclick="window.app.toast('Clinic workspace code: CAMP-2026')">
-              Code: CAMP-2026 📋
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;">
+            <div>
+              <b id="settings-hub-title" style="font-size:15px;color:var(--ink);">Mobile Health Camp Unit</b>
+              <small id="settings-hub-code-sub" style="display:block;color:var(--mute);font-size:11.5px;margin-top:2px;">Camp Code: CAMP-2026</small>
+            </div>
+            <button class="btn" style="width:auto;padding:6px 14px;font-size:12px;background:#0284C7;" onclick="window.app.openTeamManagementModal()">
+              👥 Team &amp; Doctors
             </button>
           </div>
         </div>
@@ -1565,6 +1844,15 @@
           <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;">
             <b style="color:var(--ink);">SQLite Local Mirror</b>
             <span class="tag" id="settings-sqlite-status">Synced</span>
+          </div>
+        </div>
+
+        <!-- Live Quality & Blur Diagnostics (?debug=1) -->
+        <div id="settings-debug-quality-card" class="clinical-card" style="display:none;padding:14px;margin-bottom:12px;border-left:4px solid #F59E0B;">
+          <small style="color:#D97706;text-transform:uppercase;font-size:10.5px;font-weight:700;">Diagnostic Blur Scores (?debug=1)</small>
+          <div style="margin-top:6px;font-size:12.5px;color:var(--ink);line-height:1.6;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;">
+            <div>Client Sharpness: <b id="settings-debug-client-sharpness">--</b> (Threshold: 280)</div>
+            <div>Server Sharpness: <b id="settings-debug-server-sharpness">--</b> (Server Threshold: 280)</div>
           </div>
         </div>
 
@@ -1633,6 +1921,20 @@
           </div>
         </div>
 
+        <!-- AI Token & Cost Breakdown Ledger Card -->
+        <div class="sec" style="margin-top:16px;display:flex;align-items:center;justify-content:space-between;">
+          <h3 style="color:var(--ink);margin:0;">AI Token &amp; Cost Ledger</h3>
+          <span class="tag ok" style="font-size:10.5px;">Live Metering</span>
+        </div>
+        <div class="clinical-card" style="padding:14px;margin-bottom:12px;">
+          <p style="font-size:12px;color:var(--mute);margin-bottom:10px;">
+            Per-document audit trail of vision extraction tokens, latency, and estimated billing.
+          </p>
+          <div id="billing-ledger-list" style="display:flex;flex-direction:column;gap:8px;max-height:280px;overflow-y:auto;">
+            <p style="color:var(--mute);font-size:12px;text-align:center;padding:12px 0;">Loading token telemetry...</p>
+          </div>
+        </div>
+
         <div class="sec" style="margin-top:16px;">
           <h3>Flow A: Start & Account Screens</h3>
         </div>
@@ -1698,6 +2000,38 @@
         </button>
       </div>
     </section>
+
+    <!-- UNSUPPORTED FORM PICKER MODAL -->
+    <div class="ov" id="unsupported-form-modal">
+      <div style="max-width:440px;">
+        <div class="modal-handle-bar"></div>
+        <div class="modal-header-row">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="font-size:20px;">📋</span>
+            <h3 style="margin:0;font-size:16px;">Unrecognized Form Template</h3>
+          </div>
+          <button type="button" class="modal-close-icon-btn" onclick="window.app.dismissUnsupportedModal(true)">
+            <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </div>
+        <p style="color:var(--mute);font-size:12.5px;margin:8px 0 14px;line-height:1.4;">
+          The scanned document footer code could not be automatically identified. Please select the appropriate form template below, or retake the scan with clear lighting.
+        </p>
+
+        <div style="margin-bottom:16px;">
+          <label for="unsupported-form-select" style="font-weight:700;font-size:12.5px;color:var(--ink);display:block;margin-bottom:6px;">Select Form Template</label>
+          <select id="unsupported-form-select" style="width:100%;padding:10px;border-radius:8px;border:1.5px solid var(--border,#cbd5e1);font-size:13.5px;background:var(--input-bg,#fff);color:var(--ink,#1e293b);">
+            <option value="tpl_adult_history_v9_1,tpl_adult_examination_v9_1">Adult Comprehensive Health Screening (v9.1)</option>
+            <option value="tpl_paediatric_history_v9_3,tpl_paediatric_examination_v9_7">Paediatric School Health Screening (v9.3 / v9.7)</option>
+          </select>
+        </div>
+
+        <div style="display:flex;gap:10px;justify-content:flex-end;">
+          <button type="button" class="btn ghost" id="unsupported-retake-btn" style="padding:8px 16px;font-size:13px;" onclick="window.app.dismissUnsupportedModal(true)">Retake Scan</button>
+          <button type="button" class="btn" id="unsupported-confirm-btn" style="padding:8px 16px;font-size:13px;background:var(--teal,#0E7C6B);color:#fff;" onclick="window.app.dismissUnsupportedModal(false)">Use Selected Template</button>
+        </div>
+      </div>
+    </div>
 
     <!-- BUY ADD-ON MODAL OVERLAY -->
     <div class="ov" id="buy-addon-modal">
@@ -1926,58 +2260,7 @@
       </div>
     </div>
 
-    <!-- AI PIPELINE KEY CONFIGURATION MODAL -->
-    <div class="modal" id="ai-settings-modal" style="display:none;align-items:center;justify-content:center;position:fixed;inset:0;background:rgba(15,23,42,0.7);backdrop-filter:blur(6px);z-index:99999;padding:16px;">
-      <div style="background:var(--bg,#ffffff);border:1px solid var(--border,#e2e8f0);border-radius:20px;padding:24px;width:100%;max-width:440px;box-shadow:0 25px 50px -12px rgba(0,0,0,0.35);color:var(--text,#0f172a);position:relative;">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
-          <div style="display:flex;align-items:center;gap:10px;">
-            <div style="width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#E11D48,#BE123C);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:16px;">⚡</div>
-            <div>
-              <h3 style="margin:0;font-size:17px;font-weight:700;">Unified AI Key Engine</h3>
-              <span style="font-size:11px;color:var(--mute,#64748b);">One Pipeline · Auto-Detects Any Provider</span>
-            </div>
-          </div>
-          <button type="button" onclick="window.closeAISettingsModal()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--mute,#64748b);">✕</button>
-        </div>
 
-        <div style="margin-bottom:14px;">
-          <label style="display:block;font-size:12px;font-weight:600;margin-bottom:6px;color:var(--text,#0f172a);">
-            Insert AI API Key (NVIDIA NIM, Groq, Gemini, Claude, OpenAI)
-          </label>
-          <input type="password" id="modal-ai-api-key" placeholder="Paste your API key (e.g. nvapi-..., gsk_..., AIzaSy...)" 
-                 style="width:100%;box-sizing:border-box;padding:10px 14px;border-radius:10px;border:1px solid var(--border,#cbd5e1);background:var(--card-bg,#f8fafc);color:inherit;font-family:monospace;font-size:13px;"
-                 oninput="window.updateAIKeyDetection(this.value)" />
-          <div id="modal-ai-key-detect-pill" style="margin-top:8px;font-size:11px;display:flex;align-items:center;gap:6px;color:var(--mute,#64748b);">
-            <span style="width:8px;height:8px;border-radius:50%;background:#94a3b8;display:inline-block;" id="modal-ai-detect-dot"></span>
-            <span id="modal-ai-detect-label">Auto-detect ready: Paste any supported AI key</span>
-          </div>
-        </div>
-
-        <div style="margin-bottom:18px;display:flex;flex-direction:column;gap:8px;background:rgba(225,29,72,0.04);border:1px dashed rgba(225,29,72,0.25);border-radius:10px;padding:12px;font-size:11px;line-height:1.5;">
-          <div style="display:flex;justify-content:space-between;">
-            <span style="color:var(--mute,#64748b);">Active Engine:</span>
-            <b id="modal-ai-active-provider" style="color:var(--brand,#E11D48);">Auto-detecting...</b>
-          </div>
-          <div style="display:flex;justify-content:space-between;">
-            <span style="color:var(--mute,#64748b);">Default Model:</span>
-            <span id="modal-ai-primary-model" style="font-family:monospace;">-</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;">
-            <span style="color:var(--mute,#64748b);">Fallback Escalation:</span>
-            <span id="modal-ai-fallback-model" style="font-family:monospace;">-</span>
-          </div>
-        </div>
-
-        <div style="display:flex;gap:10px;">
-          <button type="button" class="btn" style="flex:1;background:linear-gradient(135deg,#E11D48,#BE123C);color:#fff;border:none;border-radius:10px;padding:11px;font-weight:600;font-size:13px;cursor:pointer;" onclick="window.saveAISettings()">
-            Save &amp; Activate Key
-          </button>
-          <button type="button" class="btn ghost" style="border:1px solid var(--border,#cbd5e1);border-radius:10px;padding:11px 14px;font-size:12px;cursor:pointer;color:var(--mute,#64748b);" onclick="window.clearAISettings()">
-            Use Server Default (.env)
-          </button>
-        </div>
-      </div>
-    </div>
 
     <!-- 1. PRE-FLIGHT IMAGE QUALITY WARNING MODAL -->
     <div class="modal" id="modal-quality-alert" style="display:none;align-items:center;justify-content:center;position:fixed;inset:0;background:rgba(15,23,42,0.75);backdrop-filter:blur(6px);z-index:99999;padding:16px;">
@@ -1995,13 +2278,13 @@
         <div id="quality-debug-scores" style="display:none;font-size:11px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;background:#0F172A;color:#10B981;border-radius:6px;padding:6px 10px;margin-bottom:16px;text-align:left;line-height:1.4;"></div>
         <div style="display:flex;flex-direction:column;gap:10px;">
           <button class="btn" style="background:#0284C7;color:#fff;border-radius:10px;font-weight:700;padding:12px;" onclick="window.app.retryCaptureFromAlert()">
-            🔄 Retake / Re-upload Photo
+            Retake
           </button>
           <button class="btn ghost" id="quality-torch-btn" style="display:none;border-radius:10px;font-weight:700;padding:10px;color:#0284C7;border-color:#0284C7;background:#F0F9FF;" onclick="window.app.turnOnTorchAndRetake()">
             🔦 Turn On Flashlight &amp; Retake
           </button>
-          <button class="btn ghost" style="color:#64748B;border:none;font-size:12.5px;font-weight:600;padding:8px;" onclick="window.app.bypassQualityAlert()">
-            ⚡ Proceed Anyway (Use Current Capture)
+          <button class="btn ghost" style="color:#64748B;border:1px solid #CBD5E1;border-radius:10px;font-size:13px;font-weight:600;padding:10px;" onclick="window.app.bypassQualityAlert()">
+            Proceed anyway
           </button>
         </div>
       </div>
@@ -2030,12 +2313,82 @@
       </div>
     </div>
 
+    <!-- 3. COMMUNITY & TEAM DOCTORS MANAGEMENT MODAL -->
+    <div class="modal" id="team-management-modal" style="display:none;align-items:center;justify-content:center;position:fixed;inset:0;background:rgba(15,23,42,0.8);backdrop-filter:blur(6px);z-index:99999;padding:16px;">
+      <div style="background:var(--bg,#ffffff);border:1.5px solid #0284C7;border-radius:20px;width:100%;max-width:620px;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 25px 50px -12px rgba(0,0,0,0.4);color:var(--text,#0f172a);overflow:hidden;">
+        <!-- Modal Top Bar -->
+        <div style="padding:16px 20px;border-bottom:1px solid #E2E8F0;display:flex;align-items:center;justify-content:space-between;background:#F8FAFC;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div style="width:36px;height:36px;border-radius:10px;background:#F0F9FF;color:#0284C7;display:flex;align-items:center;justify-content:center;font-size:18px;">
+              👥
+            </div>
+            <div>
+              <b style="font-size:16px;display:block;">Community Team &amp; Doctors</b>
+              <small id="team-modal-hub-sub" style="color:#64748B;font-size:12px;">Manage attending physicians &amp; field staff</small>
+            </div>
+          </div>
+          <button type="button" class="modal-close-icon-btn" style="background:none;border:none;font-size:20px;cursor:pointer;color:#64748B;padding:4px 8px;" onclick="window.app.closeTeamManagementModal()">
+            ✕
+          </button>
+        </div>
+
+        <!-- Modal Body Content -->
+        <div style="padding:18px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:16px;">
+          <!-- Active Join Code Pill & Rotate -->
+          <div style="background:#F0FDF4;border:1px solid #86EFAC;border-radius:14px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;">
+            <div>
+              <small style="color:#166534;font-size:11px;font-weight:700;text-transform:uppercase;display:block;">Current Workspace Join Code</small>
+              <b id="team-modal-active-code" style="font-size:18px;color:#14532D;letter-spacing:1px;font-family:monospace;">CAMP-2026</b>
+            </div>
+            <button class="btn ghost" style="width:auto;padding:5px 12px;font-size:11.5px;color:#166534;border:1px solid #86EFAC;background:#fff;" onclick="window.app.rotateTeamWorkspaceCode()">
+              🔄 Rotate Code
+            </button>
+          </div>
+
+          <!-- Invite Doctor Form -->
+          <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:14px;padding:14px;">
+            <b style="font-size:13.5px;color:#0F172A;display:block;margin-bottom:8px;">➕ Invite Staff or Physician</b>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <input id="team-invite-email" type="email" placeholder="doctor.email@hospital.org" style="flex:2;min-width:180px;height:38px;padding:0 12px;border-radius:10px;border:1px solid #CBD5E1;font-size:13px;background:#fff;">
+              <select id="team-invite-role" style="flex:1;min-width:120px;height:38px;padding:0 10px;border-radius:10px;border:1px solid #CBD5E1;font-size:12.5px;background:#fff;">
+                <option value="doctor">Physician</option>
+                <option value="field_worker">Field Worker</option>
+                <option value="admin">Administrator</option>
+              </select>
+              <button class="btn" style="width:auto;height:38px;padding:0 16px;font-size:12.5px;background:#0284C7;" onclick="window.app.sendTeamInvite()">
+                Generate Invite
+              </button>
+            </div>
+            <div id="team-invite-created-box" style="display:none;margin-top:10px;padding:8px 12px;border-radius:8px;background:#EFF6FF;border:1px solid #BFDBFE;font-size:12px;color:#1E40AF;">
+            </div>
+          </div>
+
+          <!-- Team Members List -->
+          <div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+              <b style="font-size:14px;color:#0F172A;">Attending Staff &amp; Doctors (<span id="team-members-count">0</span>)</b>
+            </div>
+            <div id="team-members-list" style="display:flex;flex-direction:column;gap:8px;">
+              <!-- Populated via JS -->
+            </div>
+          </div>
+        </div>
+
+        <!-- Modal Footer -->
+        <div style="padding:12px 18px;border-top:1px solid #E2E8F0;display:flex;justify-content:flex-end;background:#F8FAFC;">
+          <button class="btn ghost" style="width:auto;padding:6px 16px;font-size:12.5px;border:1px solid #CBD5E1;" onclick="window.app.closeTeamManagementModal()">
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- TOAST NOTIFICATION -->
     <div class="toast" id="toast"></div>
 
   </div>
 
   <!-- Main Application Logic Module (Cache-Busted) -->
-  <script type="module" src="js/app.js?v=20261025_clinical_alerts_v2"></script>
+  <script type="module" src="js/app.js?v=20261107_nav_fix"></script>
 </body>
 </html>

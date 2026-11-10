@@ -10,8 +10,11 @@ def client(tmp_path):
     app = create_app(db_path=db_file)
     app.config["TESTING"] = True
     from backend import database
-    database.create_camp("Test Adyar Camp", 100, "Today", camp_id="camp_adyar_01", db_path=db_file)
+    from backend.services.auth_service import create_access_token
+    database.create_camp("Test Adyar Camp", 100, "Today", camp_id="camp_adyar_01", community_id="comm_api_test", db_path=db_file)
+    token = create_access_token(user_id="doc_test_api", role="admin", org_id="comm_api_test")
     with app.test_client() as client:
+        client.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {token}"
         yield client
 
 def test_health_and_status(client):

@@ -6,6 +6,7 @@ import os
 import json
 import pytest
 from backend.services.template_engine import TemplateEngine, TemplateValidationError, default_template_engine
+from backend.services.ai_service import get_prompt_for_target_group
 from backend.services.invariants import (
     wrap_field_value,
     format_screening_alert,
@@ -18,10 +19,13 @@ from backend.app import create_app
 
 @pytest.fixture
 def client(tmp_path):
+    from backend.services.auth_service import create_access_token
     test_db = str(tmp_path / "test_templates.db")
     app = create_app(db_path=test_db)
     app.config["TESTING"] = True
+    token = create_access_token(user_id="doc_tpl", role="admin", org_id="org_default")
     with app.test_client() as c:
+        c.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {token}"
         yield c
 
 
@@ -90,6 +94,20 @@ def test_paediatric_examination_atr_and_otoscopy():
     assert "otoscope_right_ear" in field_keys
     assert "otoscope_left_ear" in field_keys
     assert "admission_id" in field_keys
+
+
+def test_paediatric_prompt_only_uses_paediatric_pdf_fields():
+    """The paediatric AI prompt must match the paediatric PDF schema exactly and omit adult-only legacy keys."""
+    prompt = get_prompt_for_target_group("paediatric")
+
+    assert "screening_type" in prompt
+    assert "parent_name" in prompt
+    assert "mobile_number" in prompt
+    assert "vision_distant_right" in prompt
+    assert "doctor_signature" in prompt
+
+    for key in ["full_name", "emergency_contact_phone", "rbs", "ecg_notes", "prescription", "pallor"]:
+        assert key not in prompt
 
 
 # ==============================================================================

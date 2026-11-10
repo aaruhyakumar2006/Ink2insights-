@@ -15,6 +15,13 @@ async function request(path, options = {}) {
   const url = `${API_BASE}${path}`;
   const opts = { ...options };
   const headers = opts.headers ? { ...opts.headers } : {};
+
+  // Supabase / JWT Auth Token Header
+  const authToken = localStorage.getItem('auth_token') || localStorage.getItem('supabase_access_token');
+  if (authToken && !headers['Authorization']) {
+    headers['Authorization'] = `Bearer ${authToken.trim()}`;
+  }
+
   const customKey = localStorage.getItem('i2i_ai_api_key');
   if (customKey && !headers['X-AI-API-Key']) {
     headers['X-AI-API-Key'] = customKey.trim();
@@ -39,6 +46,20 @@ async function request(path, options = {}) {
     }
     
     if (!res.ok) {
+      if (res.status === 401) {
+        // Return to login screen on 401 Unauthorized
+        // BUT: Don't redirect if we're on landing page (unauthenticated is expected there)
+        localStorage.removeItem('auth_token');
+        localStorage.removeItem('supabase_access_token');
+        
+        // Only redirect to login if we're NOT on landing or splash screens
+        if (window.app && typeof window.app.go === 'function') {
+          const currentScreen = window.app.state?.currentScreen || '';
+          if (currentScreen !== 'landing' && currentScreen !== 'splash' && currentScreen !== 'login') {
+            window.app.go('login');
+          }
+        }
+      }
       const errMsg = (data && data.error) ? data.error : `Request failed (${res.status})`;
       const errorObj = new Error(errMsg);
       errorObj.status = res.status;
@@ -52,6 +73,94 @@ async function request(path, options = {}) {
     }
     throw err;
   }
+}
+
+// Cache for blob URLs to avoid redundant network requests
+const blobUrlCache = new Map();
+
+/**
+ * Rule 10.3: Authenticated file loader for <img> tags and document previews.
+ * Fetches private files with Authorization header and resolves to a browser blob URL.
+ */
+export async function getFileBlobUrl(urlOrPath) {
+  if (!urlOrPath) return '';
+  if (urlOrPath.startsWith('data:') || urlOrPath.startsWith('blob:')) {
+    return urlOrPath;
+  }
+  if (blobUrlCache.has(urlOrPath)) {
+    return blobUrlCache.get(urlOrPath);
+  }
+
+  const targetUrl = urlOrPath.startsWith('http') ? urlOrPath : `${API_BASE}${urlOrPath}`;
+  const authToken = localStorage.getItem('auth_token') || localStorage.getItem('supabase_access_token');
+  const headers = {};
+  if (authToken) {
+    headers['Authorization'] = `Bearer ${authToken.trim()}`;
+  }
+
+  try {
+    const res = await fetch(targetUrl, { headers });
+    if (!res.ok) {
+      return urlOrPath;
+    }
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    blobUrlCache.set(urlOrPath, objectUrl);
+    return objectUrl;
+  } catch (err) {
+    console.warn('Could not load file via authenticated blob:', err);
+    return urlOrPath;
+  }
+}
+
+// Automatic token refresh helper (Rule 0.4)
+export async function refreshAuthSession() {
+  const currentToken = localStorage.getItem('auth_token') || localStorage.getItem('supabase_access_token');
+  if (!currentToken) return null;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/refresh`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${currentToken.trim()}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.access_token) {
+        localStorage.setItem('auth_token', data.access_token);
+        return data.access_token;
+      }
+    }
+  } catch (e) {
+    console.warn('Flask session refresh error, checking supabase fallback:', e);
+  }
+
+  if (window.supabase && typeof window.supabase.createClient === 'function') {
+    const supabaseUrl = localStorage.getItem('supabase_url');
+    const supabaseAnonKey = localStorage.getItem('supabase_anon_key');
+    if (supabaseUrl && supabaseAnonKey && !window.supabaseClient) {
+      window.supabaseClient = window.supabase.createClient(supabaseUrl, supabaseAnonKey);
+    }
+    if (window.supabaseClient?.auth) {
+      try {
+        const { data } = await window.supabaseClient.auth.getSession();
+        if (data?.session?.access_token) {
+          localStorage.setItem('supabase_access_token', data.session.access_token);
+          return data.session.access_token;
+        }
+      } catch (e) {
+        console.warn('Auto refresh error:', e);
+      }
+    }
+  }
+  return localStorage.getItem('auth_token');
+}
+
+// Refresh token periodically (every 10 minutes)
+if (typeof window !== 'undefined') {
+  setInterval(refreshAuthSession, 10 * 60 * 1000);
 }
 
 export const api = {
@@ -89,6 +198,13 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
+    });
+  },
+
+  async loginDemo() {
+    return request('/api/auth/demo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
     });
   },
 
@@ -132,7 +248,7 @@ export const api = {
     return request(`/api/records/${encodeURIComponent(recordId)}`);
   },
 
-  async extractPages(page1Blob, page2Blob, campId = null, qualityBypassed = false) {
+  async extractPages(page1Blob, page2Blob, campId = null, qualityBypassed = false, templateIds = null) {
     // ── Offline path: encrypt + enqueue ────────────────────────────────────
     if (!navigator.onLine) {
       const apiHeaders = {};
@@ -144,7 +260,7 @@ export const api = {
       if (customModel) apiHeaders['X-AI-Model'] = customModel.trim();
       if (qualityBypassed) apiHeaders['X-Quality-Bypassed'] = '1';
 
-      const id = await offlineQueue.enqueue(page1Blob, page2Blob, { campId, apiHeaders });
+      const id = await offlineQueue.enqueue(page1Blob, page2Blob, { campId, apiHeaders, templateIds });
       const queueLength = await offlineQueue.length();
       // Return a sentinel so callers can distinguish queued from real response
       return {
@@ -161,6 +277,10 @@ export const api = {
     formData.append('page2', page2Blob, 'page2.jpg');
     if (campId) formData.append('camp_id', campId);
     if (qualityBypassed) formData.append('quality_bypassed', '1');
+    if (templateIds) {
+      const tIds = Array.isArray(templateIds) ? templateIds.join(',') : templateIds;
+      formData.append('template_ids', tIds);
+    }
 
     return request('/api/extract', {
       method: 'POST',
@@ -218,6 +338,56 @@ export const api = {
   async eraseRecord(recordId) {
     return request(`/api/records/${encodeURIComponent(recordId)}/erase`, {
       method: 'POST'
+    });
+  },
+
+  async getDoctorProfile(doctorId = null) {
+    const qs = doctorId ? `?doctor_id=${encodeURIComponent(doctorId)}` : '';
+    return request(`/api/doctor/profile${qs}`);
+  },
+
+  async updateDoctorProfile(payload) {
+    return request('/api/doctor/profile', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+  },
+
+  async getCommunityMembers(communityId = null) {
+    const qs = communityId ? `?community_id=${encodeURIComponent(communityId)}` : '';
+    return request(`/api/community/members${qs}`);
+  },
+
+  async inviteDoctorToCommunity(email, role = 'doctor', expiresHours = 72) {
+    return request('/api/community/invite', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, role, expires_hours: expiresHours })
+    });
+  },
+
+  async rotateCommunityCode(communityId, newCode = null) {
+    return request('/api/community/rotate-code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ community_id: communityId, new_code: newCode })
+    });
+  },
+
+  async revokeCommunityMember(communityId, doctorId) {
+    return request('/api/community/members/revoke', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ community_id: communityId, doctor_id: doctorId })
+    });
+  },
+
+  async calculatePaediatricScreening(payload) {
+    return request('/api/paediatric/screen', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
     });
   },
 
@@ -363,6 +533,35 @@ export const api = {
 
   async getAIStatus() {
     return request('/api/ai/status');
+  },
+
+  async classifyTemplate(footerCode, headerText = null) {
+    return request('/api/templates/classify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ footer_code: footerCode, header_text: headerText })
+    });
+  },
+
+  async pairCase(historyPage, examPage, sessionId = null) {
+    return request('/api/cases/pair', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        history_page: historyPage,
+        exam_page: examPage,
+        session_id: sessionId
+      })
+    });
+  },
+
+  async getTemplate(templateId, uiSchema = false) {
+    const qs = uiSchema ? '?ui_schema=true' : '';
+    return request(`/api/templates/${encodeURIComponent(templateId)}${qs}`);
+  },
+
+  async listTemplates() {
+    return request('/api/templates');
   }
 };
 

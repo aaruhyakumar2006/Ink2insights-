@@ -20,16 +20,17 @@ from PIL import Image, ImageOps
 logger = logging.getLogger("i2i.quality")
 
 # Environment Thresholds (calibrated on real clinic camp intake forms)
-DEFAULT_BLUR_MIN = float(os.getenv("QUALITY_BLUR_MIN", "280.0"))
-DEFAULT_DARK_MAX = float(os.getenv("QUALITY_DARK_MAX", "50.0"))
+# White paper documents should not be treated as glare just because they are bright.
+DEFAULT_BLUR_MIN = float(os.getenv("QUALITY_BLUR_MIN", "40.0"))
+DEFAULT_DARK_MAX = float(os.getenv("QUALITY_DARK_MAX", "75.0"))
 DEFAULT_GLARE_MAX = float(os.getenv("QUALITY_GLARE_MAX", "12.0"))
 
 
 def get_quality_config() -> Dict[str, float]:
     """Retrieve active quality thresholds from environment."""
     return {
-        "blur_min": float(os.getenv("QUALITY_BLUR_MIN", "280.0")),
-        "dark_max": float(os.getenv("QUALITY_DARK_MAX", "50.0")),
+        "blur_min": float(os.getenv("QUALITY_BLUR_MIN", "40.0")),
+        "dark_max": float(os.getenv("QUALITY_DARK_MAX", "75.0")),
         "glare_max": float(os.getenv("QUALITY_GLARE_MAX", "12.0")),
     }
 
@@ -144,9 +145,16 @@ def assess_image_quality(
         # 3. Brightness: mean pixel luminance (0-255)
         brightness = float(np.mean(gray_arr))
 
-        # 4. Glare: percentage of near-white AND saturated/specular clipped pixels (>= 250 across RGB channels)
-        # Real camera glare pegs sensor dynamic range blowout across all channels; normal white paper does not.
-        specular_clipped = (rgb_arr[:, :, 0] >= 250) & (rgb_arr[:, :, 1] >= 250) & (rgb_arr[:, :, 2] >= 250)
+        # 4. Glare: count only pixels that exceed the document's dominant white floor.
+        # A clean white paper background will naturally be near 255/255/255, so we must
+        # ignore the baseline paper-white level and flag only stronger specular hotspots.
+        white_floor = float(np.percentile(gray_arr, 95.0))
+        specular_clipped = (
+            (rgb_arr[:, :, 0] >= 250)
+            & (rgb_arr[:, :, 1] >= 250)
+            & (rgb_arr[:, :, 2] >= 250)
+            & (gray_arr.astype(np.float32) > (white_floor + 2.0))
+        )
         glare_count = int(np.sum(specular_clipped))
         glare_pct = float((glare_count / (new_w * new_h)) * 100.0)
 

@@ -73,33 +73,33 @@ ADULT_EXTRACTION_PROMPT = APPENDIX_C_PROMPT
 PAEDIATRIC_EXTRACTION_PROMPT = """You are reading two photographed pages of a school student's / child's paediatric health screening record.
 Image 1 is the Paediatric Intake / Student Information Sheet (filled by parents/school).
 Image 2 is the Paediatric Clinical Assessment Sheet (filled by the paediatrician/screening doctor).
-Read printed text, handwriting and ticked boxes.
-Return only JSON. For every field return [value, confidence], where value is
-a string or null and confidence is a number from 0 to 1.
+Read printed text, handwriting, and ticked boxes.
+Return only valid JSON. For every field return [value, confidence], where value is a string or null and confidence is a number from 0 to 1.
 Rules:
 - Never guess. If a field is blank, return [null, 1].
 - If you cannot read it, return [null, a number below 0.5].
 - Yes or No fields return exactly 'Yes', 'No' or null.
 - Normal or abnormal fields return exactly 'Normal', 'Abnormal' or null, with details in the _d field.
-- Copy numbers exactly as written (e.g., height, weight, spinal ATR angle in degrees). Do not convert units.
+- Copy numbers exactly as written. Do not convert units.
 - Do not diagnose or add medical advice.
 
 Field keys to extract:
-Identifiers: screening_type, school_name, class_and_section, admission_id, moc_doc_id
-Personal: full_name, gender, dob, age, blood_group, parent_guardian_name, emergency_contact_phone, address
-History: birth_history, milestones, immunization_status, dietary_habits, allergy, allergy_d, medications, medications_d, other_issues
-Consent: consent_screening, signature_present
-Vitals & Paediatric Measurements: exam_date, height_cm, weight_kg, pulse, bp, spinal_caliper_atr, head_circumference, muac
-General & ENT: vital_signs_status, gait_status, ears_hearing_status, otoscopy_findings, oral_cavity_throat, lymph_nodes
-Vision: vision_type, distant_vision_right, distant_vision_left, color_vision, squint_strabismus
-Dental: dental, dental_caries, malocclusion, oral_hygiene, dental_advice
-Referral & Examination: examination_details, specialist, referral_reason, doctor_name"""
+Identifiers: screening_type, school_name, admission_id, moc_doc_id
+Personal: person_name, class_and_section, dob, age, gender, blood_group, parent_name, mobile_number, email, address
+History: known_allergies, current_medication, past_surgery, vaccinated_for_age, behaviour_concerns, other_medical_issues, family_adults_count, family_minors_count, pediatrician_name
+Consent: consent_screening, consent_first_aid, consent_data_research, parent_signature
+Vitals & Growth: exam_date, height, weight, waist_circumference, bmi, blood_pressure, pulse, spinal_caliper_atr
+General & ENT: vital_signs_status, vital_signs_details, gait_status, gait_details, otoscope_right_ear, otoscope_left_ear, sys_nose, sys_throat, sys_skin, sys_hair, sys_other_systems
+Vision & Dental: vision_aid_status, vision_distant_right, vision_distant_left, vision_color, dental_status, dental_abnormality, dental_advice, specialist_referred_to, doctor_name, doctor_signature"""
 
 def get_prompt_for_target_group(target_group: Optional[str]) -> str:
-    """Return appropriate prompt template based on camp target group ('paediatric' vs 'adult')."""
-    if target_group and target_group.strip().lower() == "paediatric":
+    """Return the prompt matching the selected form family, with paediatric keys only for paediatric scans."""
+    normalized = (target_group or "").strip().lower()
+    if normalized in {"paediatric", "pediatric", "school", "child"}:
         return PAEDIATRIC_EXTRACTION_PROMPT
-    return ADULT_EXTRACTION_PROMPT
+    if normalized in {"adult", "general", "staff", "college", "university"}:
+        return ADULT_EXTRACTION_PROMPT
+    return PAEDIATRIC_EXTRACTION_PROMPT
 
 # Maintain SYSTEM_EXTRACTION_PROMPT alias for backward compatibility
 SYSTEM_EXTRACTION_PROMPT = APPENDIX_C_PROMPT
@@ -564,13 +564,13 @@ def apply_server_side_flags(fields: Dict[str, List[Any]]) -> Dict[str, Any]:
         if len(bp_digits) >= 1:
             try:
                 bp_sys = int(bp_digits[0])
-            except ValueError:
-                pass
+            except ValueError as e:
+                logger.debug("Failed to parse systolic BP from '%s': %s", bp_digits[0], e)
         if len(bp_digits) >= 2:
             try:
                 bp_dia = int(bp_digits[1])
-            except ValueError:
-                pass
+            except ValueError as e:
+                logger.debug("Failed to parse diastolic BP from '%s': %s", bp_digits[1], e)
     bp_classification = classify_bp(bp_sys, bp_dia)
 
     # Paediatric screening (IAP percentiles + ATR) — only when age < 18
@@ -966,7 +966,8 @@ def extract(
     db_path: Optional[str] = None,
     api_key: Optional[str] = None,
     provider: Optional[str] = None,
-    model: Optional[str] = None
+    model: Optional[str] = None,
+    template_ids: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     """Phase 1 Single AI Function with Phase 3 Quota Reservation & Deduplication.
     
@@ -1052,7 +1053,11 @@ def extract(
 
     camp = database.get_camp_by_id(camp_id, db_path=target_db) if camp_id else None
     camp_target_group = (camp.get("target_group") if camp else None) or "adult"
-    prompt_to_use = get_prompt_for_target_group(camp_target_group)
+    if template_ids:
+        from .template_engine import default_template_engine
+        prompt_to_use = default_template_engine.build_extraction_prompt(template_ids)
+    else:
+        prompt_to_use = get_prompt_for_target_group(camp_target_group)
 
     try:
         try:
@@ -1141,6 +1146,7 @@ def extract(
 
     # Log calls in usage_ledger
     calls = extraction_res.get("calls", [])
+    primary_template_id = template_ids[0] if template_ids else None
     for call_info in calls:
         if call_info:
             action = "escalation_call" if call_info.get("model") == service.fallback_model else "extract_call"
@@ -1154,6 +1160,7 @@ def extract(
                 tokens_think=call_info.get("tokens_think", 0),
                 seconds=call_info.get("seconds", 0.0),
                 cost_rs=call_info.get("cost_rs", 0.0),
+                notes=f"template:{primary_template_id}" if primary_template_id else None,
                 db_path=target_db
             )
 
@@ -1164,6 +1171,26 @@ def extract(
         extraction_res["status"] = "needs_manual"
         extraction_res["http_status"] = 422
         return extraction_res
+
+    # Normalization via default_extraction_pipeline (glossary + invariants)
+    try:
+        from .extraction_v2 import default_extraction_pipeline
+        chosen_tid = primary_template_id or ("tpl_paediatric_history_v9_3" if camp_target_group == "paediatric" else "tpl_adult_history_v9_1")
+        norm_res = default_extraction_pipeline.process_extracted_payload(chosen_tid, extraction_res.get("data") or {})
+        if norm_res:
+            extraction_res["template_id"] = chosen_tid
+            extraction_res["template_version"] = norm_res.get("template_version", "1.0.0")
+            extraction_res["form_family"] = "paediatric" if "paediatric" in chosen_tid else "adult"
+            if norm_res.get("missing_fields"):
+                cur_miss = set(extraction_res.get("missing_fields") or [])
+                cur_miss.update(norm_res["missing_fields"])
+                extraction_res["missing_fields"] = list(cur_miss)
+            if norm_res.get("uncertain_fields"):
+                cur_unc = set(extraction_res.get("uncertain_fields") or [])
+                cur_unc.update(norm_res["uncertain_fields"])
+                extraction_res["uncertain_fields"] = list(cur_unc)
+    except Exception as norm_err:
+        logger.warning("Glossary/invariant normalization error: %s", norm_err)
 
     if camp_target_group == "paediatric":
         try:

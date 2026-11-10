@@ -79,46 +79,346 @@ CREATE INDEX IF NOT EXISTS idx_camps_created_by ON public.camps(created_by);
 CREATE INDEX IF NOT EXISTS idx_doctors_email ON public.doctors(email);
 CREATE INDEX IF NOT EXISTS idx_doctors_auth_id ON public.doctors(auth_id);
 
--- 5. Enable Row Level Security (RLS)
+-- 5. Enable Row Level Security (RLS) as a Second Defense Layer
 ALTER TABLE public.doctors ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.camps ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.records ENABLE ROW LEVEL SECURITY;
 
--- 6. Access Policies (Open for field staff with anon key — tighten for production)
-CREATE POLICY "Allow public read doctors" ON public.doctors FOR SELECT USING (true);
-CREATE POLICY "Allow public insert doctors" ON public.doctors FOR INSERT WITH CHECK (true);
-CREATE POLICY "Allow public update doctors" ON public.doctors FOR UPDATE USING (true);
+-- Ensure tenant linkage columns exist on tables
+ALTER TABLE public.camps ADD COLUMN IF NOT EXISTS community_id TEXT;
+ALTER TABLE public.records ADD COLUMN IF NOT EXISTS community_id TEXT;
+ALTER TABLE public.records ADD COLUMN IF NOT EXISTS org_id TEXT;
+ALTER TABLE public.doctors ADD COLUMN IF NOT EXISTS community_id TEXT;
 
-CREATE POLICY "Allow public read camps" ON public.camps FOR SELECT USING (true);
-CREATE POLICY "Allow public insert camps" ON public.camps FOR INSERT WITH CHECK (true);
-CREATE POLICY "Allow public update camps" ON public.camps FOR UPDATE USING (true);
-CREATE POLICY "Allow public delete camps" ON public.camps FOR DELETE USING (true);
+-- 6. Multi-Tenant Access Policies (Strictly scoped by app_metadata -> org_id)
+-- Admin role is intra-org only; cross-org bypass (OR role = 'admin') is removed.
 
-CREATE POLICY "Allow public read records" ON public.records FOR SELECT USING (true);
-CREATE POLICY "Allow public insert records" ON public.records FOR INSERT WITH CHECK (true);
-CREATE POLICY "Allow public update records" ON public.records FOR UPDATE USING (true);
-CREATE POLICY "Allow public delete records" ON public.records FOR DELETE USING (true);
+-- Camps RLS:
+CREATE POLICY "Tenant read camps" ON public.camps
+    FOR SELECT TO authenticated
+    USING (
+        community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id')
+    );
 
--- 7. Supabase Storage Bucket for Scanned Page Images
+CREATE POLICY "Tenant insert camps" ON public.camps
+    FOR INSERT TO authenticated
+    WITH CHECK (
+        community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id')
+    );
+
+CREATE POLICY "Tenant update camps" ON public.camps
+    FOR UPDATE TO authenticated
+    USING (
+        community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id')
+    )
+    WITH CHECK (
+        community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id')
+    );
+
+CREATE POLICY "Tenant delete camps" ON public.camps
+    FOR DELETE TO authenticated
+    USING (
+        community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id')
+    );
+
+-- Records RLS:
+CREATE POLICY "Tenant read records" ON public.records
+    FOR SELECT TO authenticated
+    USING (
+        COALESCE(community_id, org_id) = (auth.jwt() -> 'app_metadata' ->> 'org_id')
+    );
+
+CREATE POLICY "Tenant insert records" ON public.records
+    FOR INSERT TO authenticated
+    WITH CHECK (
+        COALESCE(community_id, org_id) = (auth.jwt() -> 'app_metadata' ->> 'org_id')
+    );
+
+CREATE POLICY "Tenant update records" ON public.records
+    FOR UPDATE TO authenticated
+    USING (
+        COALESCE(community_id, org_id) = (auth.jwt() -> 'app_metadata' ->> 'org_id')
+    )
+    WITH CHECK (
+        COALESCE(community_id, org_id) = (auth.jwt() -> 'app_metadata' ->> 'org_id')
+    );
+
+CREATE POLICY "Tenant delete records" ON public.records
+    FOR DELETE TO authenticated
+    USING (
+        COALESCE(community_id, org_id) = (auth.jwt() -> 'app_metadata' ->> 'org_id')
+    );
+
+-- Doctors RLS:
+CREATE POLICY "Tenant read doctors" ON public.doctors
+    FOR SELECT TO authenticated
+    USING (
+        community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id')
+    );
+
+CREATE POLICY "Tenant insert doctors" ON public.doctors
+    FOR INSERT TO authenticated
+    WITH CHECK (
+        community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id')
+    );
+
+CREATE POLICY "Tenant update doctors" ON public.doctors
+    FOR UPDATE TO authenticated
+    USING (
+        community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id')
+    )
+    WITH CHECK (
+        community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id')
+    );
+
+CREATE POLICY "Tenant delete doctors" ON public.doctors
+    FOR DELETE TO authenticated
+    USING (
+        community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id')
+    );
+
+-- Communities table RLS:
+CREATE TABLE IF NOT EXISTS public.communities (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    code TEXT UNIQUE NOT NULL,
+    creator_name TEXT NOT NULL,
+    creator_email TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    expires_at TIMESTAMPTZ
+);
+ALTER TABLE public.communities ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Tenant read communities" ON public.communities
+    FOR SELECT TO authenticated
+    USING (id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+
+CREATE POLICY "Tenant insert communities" ON public.communities
+    FOR INSERT TO authenticated
+    WITH CHECK (id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+
+CREATE POLICY "Tenant update communities" ON public.communities
+    FOR UPDATE TO authenticated
+    USING (id = (auth.jwt() -> 'app_metadata' ->> 'org_id'))
+    WITH CHECK (id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+
+CREATE POLICY "Tenant delete communities" ON public.communities
+    FOR DELETE TO authenticated
+    USING (id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+
+-- Usage Ledger & Orgs tables RLS:
+CREATE TABLE IF NOT EXISTS public.orgs (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    plan TEXT DEFAULT 'outreach_10k',
+    papers_included INTEGER DEFAULT 10000,
+    papers_used INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE public.orgs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Tenant read orgs" ON public.orgs
+    FOR SELECT TO authenticated
+    USING (id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+
+CREATE POLICY "Tenant insert orgs" ON public.orgs
+    FOR INSERT TO authenticated
+    WITH CHECK (id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+
+CREATE POLICY "Tenant update orgs" ON public.orgs
+    FOR UPDATE TO authenticated
+    USING (id = (auth.jwt() -> 'app_metadata' ->> 'org_id'))
+    WITH CHECK (id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+
+CREATE POLICY "Tenant delete orgs" ON public.orgs
+    FOR DELETE TO authenticated
+    USING (id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+
+CREATE TABLE IF NOT EXISTS public.usage_ledger (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id TEXT NOT NULL REFERENCES public.orgs(id),
+    record_id TEXT,
+    event_type TEXT NOT NULL,
+    paper_delta INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE public.usage_ledger ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Tenant read usage_ledger" ON public.usage_ledger
+    FOR SELECT TO authenticated
+    USING (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+
+CREATE POLICY "Tenant insert usage_ledger" ON public.usage_ledger
+    FOR INSERT TO authenticated
+    WITH CHECK (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+
+CREATE POLICY "Tenant update usage_ledger" ON public.usage_ledger
+    FOR UPDATE TO authenticated
+    USING (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'))
+    WITH CHECK (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+
+CREATE POLICY "Tenant delete usage_ledger" ON public.usage_ledger
+    FOR DELETE TO authenticated
+    USING (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+
+-- Files table RLS:
+CREATE TABLE IF NOT EXISTS public.files (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    record_id TEXT,
+    file_type TEXT NOT NULL,
+    original_filename TEXT NOT NULL,
+    storage_path TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    file_size INTEGER NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE public.files ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Tenant read files" ON public.files
+    FOR SELECT TO authenticated
+    USING (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+
+CREATE POLICY "Tenant insert files" ON public.files
+    FOR INSERT TO authenticated
+    WITH CHECK (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+
+CREATE POLICY "Tenant update files" ON public.files
+    FOR UPDATE TO authenticated
+    USING (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'))
+    WITH CHECK (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+
+CREATE POLICY "Tenant delete files" ON public.files
+    FOR DELETE TO authenticated
+    USING (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+
+-- 7. Supabase Storage Bucket for Scanned Page Images (Private & Authenticated)
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 VALUES (
     'intake-scans',
     'intake-scans',
-    true,
-    10485760,  -- 10 MB
-    ARRAY['image/jpeg', 'image/png', 'image/webp']
+    false,  -- Private PHI bucket
+    15728640,  -- 15 MB
+    ARRAY['image/jpeg', 'image/png', 'image/webp', 'image/heic']
 )
-ON CONFLICT (id) DO NOTHING;
+ON CONFLICT (id) DO UPDATE SET public = false;
 
--- Storage policies for intake-scans bucket
-CREATE POLICY "Allow public upload intake-scans" ON storage.objects
-    FOR INSERT WITH CHECK (bucket_id = 'intake-scans');
-CREATE POLICY "Allow public read intake-scans" ON storage.objects
-    FOR SELECT USING (bucket_id = 'intake-scans');
-CREATE POLICY "Allow public delete intake-scans" ON storage.objects
-    FOR DELETE USING (bucket_id = 'intake-scans');
+-- Secure Storage policies for intake-scans bucket
+DROP POLICY IF EXISTS "Allow public upload intake-scans" ON storage.objects;
+DROP POLICY IF EXISTS "Allow public read intake-scans" ON storage.objects;
+DROP POLICY IF EXISTS "Allow public delete intake-scans" ON storage.objects;
 
--- 8. Enable Realtime Publications for Multi-Doctor Live Sync
+CREATE POLICY "Tenant upload intake-scans" ON storage.objects
+    FOR INSERT TO authenticated
+    WITH CHECK (bucket_id = 'intake-scans');
+
+CREATE POLICY "Tenant read intake-scans" ON storage.objects
+    FOR SELECT TO authenticated
+    USING (bucket_id = 'intake-scans');
+
+CREATE POLICY "Tenant delete intake-scans" ON storage.objects
+    FOR DELETE TO authenticated
+    USING (bucket_id = 'intake-scans');
+
+-- 8. Missing Segregated Intake & Audit Tables
+CREATE TABLE IF NOT EXISTS public.adult_records (
+    id TEXT PRIMARY KEY REFERENCES public.records(id) ON DELETE CASCADE,
+    camp_id TEXT NOT NULL REFERENCES public.camps(id) ON DELETE CASCADE,
+    community_id TEXT,
+    person_name TEXT NOT NULL,
+    age TEXT,
+    gender TEXT,
+    blood_pressure TEXT,
+    height TEXT,
+    weight TEXT,
+    examination_details TEXT,
+    referral_details TEXT,
+    missing_fields JSONB DEFAULT '[]'::jsonb,
+    uncertain_fields JSONB DEFAULT '[]'::jsonb,
+    structured_record JSONB,
+    status TEXT DEFAULT 'needs_review',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE public.adult_records ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Tenant adult_records access" ON public.adult_records
+    FOR ALL TO authenticated
+    USING (community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'))
+    WITH CHECK (community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+
+CREATE TABLE IF NOT EXISTS public.paediatric_records (
+    id TEXT PRIMARY KEY REFERENCES public.records(id) ON DELETE CASCADE,
+    camp_id TEXT NOT NULL REFERENCES public.camps(id) ON DELETE CASCADE,
+    community_id TEXT,
+    person_name TEXT NOT NULL,
+    age TEXT,
+    gender TEXT,
+    blood_pressure TEXT,
+    height TEXT,
+    weight TEXT,
+    paediatric_alerts JSONB DEFAULT '[]'::jsonb,
+    examination_details TEXT,
+    referral_details TEXT,
+    missing_fields JSONB DEFAULT '[]'::jsonb,
+    uncertain_fields JSONB DEFAULT '[]'::jsonb,
+    structured_record JSONB,
+    status TEXT DEFAULT 'needs_review',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE public.paediatric_records ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Tenant paediatric_records access" ON public.paediatric_records
+    FOR ALL TO authenticated
+    USING (community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'))
+    WITH CHECK (community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+
+CREATE TABLE IF NOT EXISTS public.record_audit_log (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    record_id TEXT NOT NULL,
+    org_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    user_role TEXT NOT NULL,
+    action TEXT NOT NULL,
+    changes JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE public.record_audit_log ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Tenant audit log access" ON public.record_audit_log
+    FOR ALL TO authenticated
+    USING (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'))
+    WITH CHECK (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+
+CREATE TABLE IF NOT EXISTS public.payments (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL REFERENCES public.orgs(id),
+    amount_rs NUMERIC(10, 2) NOT NULL,
+    gst_rs NUMERIC(10, 2) NOT NULL,
+    papers_credited INTEGER NOT NULL,
+    status TEXT DEFAULT 'completed',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE public.payments ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Tenant payments access" ON public.payments
+    FOR ALL TO authenticated
+    USING (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'))
+    WITH CHECK (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+
+CREATE TABLE IF NOT EXISTS public.invoices (
+    id TEXT PRIMARY KEY,
+    number TEXT UNIQUE NOT NULL,
+    org_id TEXT NOT NULL REFERENCES public.orgs(id),
+    amount_rs NUMERIC(10, 2) NOT NULL,
+    pdf_path TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE public.invoices ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Tenant invoices access" ON public.invoices
+    FOR ALL TO authenticated
+    USING (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'))
+    WITH CHECK (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+
+-- 9. Enable Realtime Publications for Multi-Doctor Live Sync
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
@@ -128,7 +428,7 @@ EXCEPTION
   WHEN duplicate_object THEN NULL;
 END $$;
 
--- 9. Auto-update updated_at timestamp
+-- 10. Auto-update updated_at timestamp
 CREATE OR REPLACE FUNCTION public.update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -142,4 +442,8 @@ CREATE TRIGGER update_doctors_updated_at BEFORE UPDATE ON public.doctors
 CREATE TRIGGER update_camps_updated_at BEFORE UPDATE ON public.camps
     FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 CREATE TRIGGER update_records_updated_at BEFORE UPDATE ON public.records
+    FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+CREATE TRIGGER update_adult_records_updated_at BEFORE UPDATE ON public.adult_records
+    FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+CREATE TRIGGER update_paediatric_records_updated_at BEFORE UPDATE ON public.paediatric_records
     FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();

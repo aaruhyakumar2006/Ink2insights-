@@ -52,6 +52,14 @@ class TemplateEngine:
                     with open(filepath, "r", encoding="utf-8") as f:
                         tpl_data = json.load(f)
                     self.validate_template_schema(tpl_data)
+                    from backend.services.field_permissions import is_identity_field
+                    for sec in tpl_data.get("sections", []):
+                        for fld in sec.get("fields", []):
+                            if "group" not in fld:
+                                fld["group"] = "identity" if is_identity_field(fld.get("key")) else "clinical"
+                            if "writer" not in fld:
+                                fld["writer"] = "field_worker" if fld["group"] == "identity" else "doctor"
+
                     tpl_id = tpl_data["id"]
                     self.templates[tpl_id] = tpl_data
                     
@@ -308,6 +316,15 @@ class TemplateEngine:
         h_session = history_page_data.get("session_id") or session_id
         e_session = exam_page_data.get("session_id") or session_id
 
+        if h_session and e_session and h_session != e_session:
+            return {
+                "status": "needs_pairing",
+                "confidence": 0.5,
+                "pairing_method": "different_sessions",
+                "reason": f"Pages belong to different capture sessions ('{h_session}' vs '{e_session}'). Requires physician verification.",
+                "join_key": None
+            }
+
         is_same_session = bool(h_session and e_session and h_session == e_session)
 
         # Name matching
@@ -316,34 +333,13 @@ class TemplateEngine:
             if h_name_norm == e_name_norm or h_name_norm in e_name_norm or e_name_norm in h_name_norm:
                 is_name_match = True
 
-        if is_same_session and is_name_match:
+        if is_name_match:
             return {
                 "status": "paired",
-                "confidence": 0.92,
-                "pairing_method": "session_and_name",
-                "reason": f"Adult pairing via same capture session '{h_session}' and matching name '{history_page_data.get('person_name')}'.",
+                "confidence": 0.95 if is_same_session else 0.90,
+                "pairing_method": "session_and_name" if is_same_session else "name_match",
+                "reason": f"Paired by matching name '{history_page_data.get('person_name')}'.",
                 "join_key": h_adm or h_moc or h_name_norm
-            }
-
-        if is_name_match and not is_same_session:
-            # Different capture sessions, but matching name
-            # Check class/section or exam date
-            h_sec = str(history_page_data.get("class_and_section") or "").strip().lower()
-            e_sec = str(exam_page_data.get("class_and_section") or "").strip().lower()
-            if h_sec and e_sec and h_sec == e_sec:
-                return {
-                    "status": "paired",
-                    "confidence": 0.88,
-                    "pairing_method": "name_and_section",
-                    "reason": f"Paired by matching name and class/section '{h_sec}'.",
-                    "join_key": h_adm or h_name_norm
-                }
-            return {
-                "status": "needs_pairing",
-                "confidence": 0.55,
-                "pairing_method": "name_only_ambiguous",
-                "reason": "Name matches but scanned in different sessions. Requires physician verification.",
-                "join_key": None
             }
 
         # Mismatch or missing link
@@ -387,8 +383,56 @@ class TemplateEngine:
             "family": tpl["family"],
             "page_type": tpl["page_type"],
             "version": tpl["version"],
-            "tabs": tabs
+            "tabs": tabs,
+            "sections": tabs
         }
+
+    def generate_extraction_prompt(self, template_id: str) -> str:
+        """Construct multimodal vision AI prompt dynamically from a single template definition."""
+        return self.build_extraction_prompt([template_id])
+
+    def build_extraction_prompt(self, template_ids: List[str]) -> str:
+        """Construct multimodal vision AI prompt dynamically from one or more template definitions."""
+        templates = []
+        for tid in template_ids:
+            tpl = self.get_template(tid)
+            if tpl:
+                templates.append(tpl)
+
+        titles = ", ".join(t.get("title", t["id"]) for t in templates) if templates else "Clinical Intake Sheet"
+
+        prompt_lines = [
+            f"You are reading photographed pages of a clinical health screening record ({titles}).",
+            "Read printed text, handwriting, and ticked/marked boxes.",
+            "Return only valid JSON. For every field return [value, confidence], where value is a string or null and confidence is a number from 0.0 to 1.0.",
+            "Rules:",
+            "- Never guess. If a field is blank, return [null, 1.0].",
+            "- If you cannot read it or it is illegible, return [null, 0.4].",
+            "- Yes or No fields return exactly 'Yes', 'No' or null.",
+            "- Normal or abnormal fields return exactly 'Normal', 'Abnormal' or null, with details in the _d field.",
+            "- Copy numbers exactly as written. Do not convert units.",
+            "- Doctors' shorthand may appear: BP, PR, HR, Wt, Ht, RBS, NAD, WNL, HTN, T2DM, Adv, F/U, Ref, Rx, O/E, H/O, C/O.",
+            "- Do not diagnose or add medical advice.",
+            "",
+            "Field keys to extract:"
+        ]
+
+        for tpl in templates:
+            for sec in tpl.get("sections", []):
+                sec_fields = []
+                for f in sec.get("fields", []):
+                    k = f["key"]
+                    lbl = f.get("label", k)
+                    hints = []
+                    if f.get("writer"):
+                        hints.append(f"writer: {f['writer']}")
+                    if f.get("validation"):
+                        hints.append(f"format: {f['validation']}")
+                    hint_str = f" ({', '.join(hints)})" if hints else ""
+                    sec_fields.append(f"{k} [{lbl}{hint_str}]")
+                prompt_lines.append(f"{sec.get('title', sec['id'])}: {', '.join(sec_fields)}")
+
+        return "\n".join(prompt_lines)
 
     def get_export_columns(self, template_id: str) -> List[Tuple[str, str]]:
         """Return list of (field_key, export_column) for spreadsheet export."""
@@ -604,6 +648,17 @@ class TemplateEngine:
         if not structure:
             return []
 
+        canon_id = self.resolve_form_id(form_id)
+        legacy_adult_keys = {
+            "full_name", "parent_guardian_name", "emergency_contact_phone", "birth_history",
+            "milestones", "immunization_status", "dietary_habits", "allergy", "allergy_d",
+            "medications", "medications_d", "other_issues", "signature_present",
+            "height_cm", "weight_kg", "bp", "head_circumference", "muac", "vision_type",
+            "distant_vision_right", "distant_vision_left", "color_vision", "squint_strabismus",
+            "dental", "dental_caries", "malocclusion", "oral_hygiene", "examination_details",
+            "specialist", "referral_reason"
+        }
+
         attributes = []
         for p in structure.get("pages", []):
             page_no = p.get("page_number", 1)
@@ -612,8 +667,11 @@ class TemplateEngine:
                 sec_id = sec.get("id")
                 sec_title = sec.get("title")
                 for fld in sec.get("fields", []):
+                    key = fld.get("key")
+                    if canon_id in {"paediatric_composite", "tpl_paediatric_history_v9_3", "tpl_paediatric_examination_v9_7"} and key in legacy_adult_keys:
+                        continue
                     attributes.append({
-                        "key": fld.get("key"),
+                        "key": key,
                         "label": fld.get("label"),
                         "type": fld.get("type"),
                         "page_number": page_no,

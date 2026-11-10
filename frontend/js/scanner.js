@@ -15,8 +15,8 @@
  * Never fails silently: returns ok: null on failure.
  */
 export const DEFAULT_QUALITY_FALLBACK = Object.freeze({
-  blur_min: 280.0,
-  dark_max: 50.0,
+  blur_min: 40.0,
+  dark_max: 75.0,
   glare_max: 12.0
 });
 

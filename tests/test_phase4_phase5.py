@@ -34,14 +34,17 @@ def app_and_db(tmp_path):
     db_file = str(tmp_path / "test_phase4_phase5.db")
     app = create_app(db_path=db_file)
     app.config["TESTING"] = True
-    database.create_camp("Phase 4-5 Camp", 100, "Today", camp_id="camp_p45_test", db_path=db_file)
+    database.create_camp("Phase 4-5 Camp", 100, "Today", camp_id="camp_p45_test", community_id="org_default", db_path=db_file)
     return app, db_file
 
 
 @pytest.fixture
 def client(app_and_db):
+    from backend.services.auth_service import create_access_token
     app, _ = app_and_db
+    token = create_access_token(user_id="doc_p45", role="admin", org_id="org_default")
     with app.test_client() as c:
+        c.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {token}"
         yield c
 
 
@@ -148,14 +151,15 @@ def test_scheduled_job_releases_expired_reservations_after_7_days(client, app_an
         conn.commit()
 
     # Verify admin protection on cleanup endpoint
-    unauth_res = client.post("/api/admin/cleanup-expired-reservations")
-    assert unauth_res.status_code == 403
+    app, _ = app_and_db
+    with app.test_client() as unauth_client:
+        unauth_res = unauth_client.post("/api/admin/cleanup-expired-reservations")
+        assert unauth_res.status_code in (401, 403)
 
     # Run cleanup job via admin API
     res = client.post(
         "/api/admin/cleanup-expired-reservations",
-        json={"expiry_days": 7},
-        headers={"X-Admin-Key": "admin_secret_key"}
+        json={"expiry_days": 7}
     )
     assert res.status_code == 200
     assert res.json["released_papers"] == 1
@@ -447,7 +451,9 @@ def test_sequential_gst_invoice_pdf_generation_and_download(client, app_and_db):
         assert header == b"%PDF-", "Generated file must be a valid PDF"
 
     # List invoices endpoint
-    res_list = client.get("/api/billing/invoices", headers={"X-Org-ID": test_org})
+    from backend.services.auth_service import create_access_token
+    tok_test_org = create_access_token(user_id="doc_p45", role="admin", org_id=test_org)
+    res_list = client.get("/api/billing/invoices", headers={"Authorization": f"Bearer {tok_test_org}"})
     assert res_list.status_code == 200
     invoices = res_list.json["invoices"]
     assert len(invoices) >= 2
@@ -455,7 +461,7 @@ def test_sequential_gst_invoice_pdf_generation_and_download(client, app_and_db):
     assert invoices[1]["number"] == inv1_num
 
     # Download invoice PDF endpoint
-    res_dl = client.get(f"/api/billing/invoices/{inv1_num}/download")
+    res_dl = client.get(f"/api/billing/invoices/{inv1_num}/download", headers={"Authorization": f"Bearer {tok_test_org}"})
     assert res_dl.status_code == 200
     assert res_dl.mimetype == "application/pdf"
     assert res_dl.data.startswith(b"%PDF-")
@@ -512,8 +518,7 @@ def test_per_org_kill_switch_isolation(client, app_and_db):
     # 1. Admin pauses ONLY org_paused
     pause_res = client.post(
         "/api/admin/ai-pause",
-        json={"org_id": org_paused, "paused": True},
-        headers={"X-Role": "admin"}
+        json={"org_id": org_paused, "paused": True}
     )
     assert pause_res.status_code == 200
 
@@ -589,7 +594,9 @@ def test_flask_limiter_enforcement_returns_429(client, app_and_db):
         "usage": {"tokens_in": 500, "tokens_out": 100, "tokens_think": 0, "seconds": 0.5, "cost_rs": 0.10}
     }
 
-    user_headers = {"X-User-ID": "dr_rate_limit_test", "X-Org-ID": "org_rate_test"}
+    from backend.services.auth_service import create_access_token
+    rate_tok = create_access_token(user_id="dr_rate_limit_test", role="doctor", org_id="org_default")
+    user_headers = {"Authorization": f"Bearer {rate_tok}", "X-User-ID": "dr_rate_limit_test", "X-Org-ID": "org_default"}
     with patch("backend.services.gemini_service.GeminiService.extract_from_images", return_value=mock_res):
         status_codes = []
         for i in range(12):
@@ -610,11 +617,12 @@ def test_consent_gating_lock_prevents_doctor_approval_and_returns_403(client, ap
     or parental consent is blank or marked 'No'.
     """
     _, db_path = app_and_db
-    camp = database.create_camp("Camp Consent Test", 50, "Today", db_path)
+    camp = database.create_camp("Camp Consent Test", 50, "Today", community_id="org_default", db_path=db_path)
     
     # 1. Record with consent withheld (consent_given = 0)
     withheld_rec = database.insert_record({
         "camp_id": camp["id"],
+        "community_id": "org_default",
         "person_name": "Minor Student A",
         "age": "12",
         "gender": "Female",

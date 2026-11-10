@@ -31,8 +31,12 @@ def test_app(tmp_path):
 
 @pytest.fixture
 def client(test_app):
+    from backend.services.auth_service import create_access_token
     app, _ = test_app
-    return app.test_client()
+    token = create_access_token(user_id="doc_forms", role="admin", org_id="org_default")
+    c = app.test_client()
+    c.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {token}"
+    return c
 
 
 def test_forms_catalog_lists_all_forms(client):

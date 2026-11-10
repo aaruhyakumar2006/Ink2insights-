@@ -42,7 +42,7 @@ A document-scanning mobile-first hybrid application designed for clinic health-c
 ## Project Structure
 
 ```
-INK2Insights/
+i2i-main/
 ├── api/                     # Vercel serverless entry point (index.py)
 ├── backend/                 # Python Flask backend
 │   ├── app.py               # REST endpoints & static file serving
@@ -155,6 +155,24 @@ To add NVIDIA NIM:
 4. Update `get_ai_service()` in `backend/app.py` to instantiate `NvidiaNimService` when `AI_PROVIDER=nvidia`.
 
 ---
+
+
+---
+
+## Full-Screen Brand Intro Video
+
+The application features a 10-second full-screen brand intro video (ink drop revealing the Ink 2 Insight logo with audio) before loading the app shell:
+
+- **File Locations**: All intro assets are located in `frontend/intro/`:
+  - `intro-portrait.mp4`: 1080x1920 vertical video for phones (~5.7 MB).
+  - `intro-landscape.mp4`: 1920x1080 horizontal video for tablets and desktop (~11.9 MB).
+  - `poster-portrait.jpg` & `poster-landscape.jpg`: Final logo frame fallbacks.
+  - `intro.js` & `intro.css`: Core player logic and responsive full-screen styling.
+  - `demo.html`: Standalone test page.
+- **How to Replace the Video**: Replace `intro-portrait.mp4` and `intro-landscape.mp4` directly in `frontend/intro/` (keeping the same filenames), or update the filenames in `frontend/intro/intro.js`.
+- **How to Skip**: Add `?nointro` to any URL (e.g. `http://localhost:5001/?nointro`). The intro automatically resolves once per session (`sessionStorage['intro_seen']`) and skips when `prefers-reduced-motion` is enabled.
+- **Offline Playback**: Intro assets and videos are cached by the Service Worker (`frontend/sw.js`) with HTTP Range support (`206 Partial Content`) for iOS Safari and Android WebView, ensuring the intro plays offline after one visit.
+
 
 ## Security & Privacy Notice
 

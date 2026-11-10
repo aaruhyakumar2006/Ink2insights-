@@ -3,6 +3,8 @@
 venv/
 env/
 __pycache__/
+node_modules/
+*.pyc
 *.py[cod]
 *$py.class
 .pytest_cache/
@@ -20,11 +22,16 @@ backend/.env
 
 # Uploads & Images (preserve privacy)
 uploads/
+frontend/uploads/
+data/
+private_uploads/
 *.jpg
 *.jpeg
 *.png
 *.webp
 !frontend/assets/*
+!frontend/intro/*
+!mobile/assets/*
 !fixtures/*
 test_download.xlsx
 *.xlsx
@@ -32,6 +39,7 @@ test_download.xlsx
 # Invoices & Generated PDFs
 *.pdf
 !backend/invoices/.gitkeep
+!docs/forms/*.pdf
 
 # OS generated files
 .DS_Store

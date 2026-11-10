@@ -61,10 +61,13 @@ def _image_to_bytes(img: Image.Image, format="JPEG") -> bytes:
 
 @pytest.fixture
 def test_client_and_db(tmp_path, monkeypatch):
+    from backend.services.auth_service import create_access_token
     db_file = str(tmp_path / "test_task2.db")
     app = create_app(db_path=db_file)
     app.config["TESTING"] = True
+    token = create_access_token(user_id="doc_task2", role="admin", org_id="org_default")
     with app.test_client() as client:
+        client.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {token}"
         yield client, db_file
 
 

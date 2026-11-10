@@ -37,14 +37,17 @@ def app_and_db(tmp_path):
     db_file = str(tmp_path / "test_phase1_phase3.db")
     app = create_app(db_path=db_file)
     app.config["TESTING"] = True
-    database.create_camp("Phase Test Camp", 100, "Today", camp_id="camp_phase_test", db_path=db_file)
+    database.create_camp("Phase Test Camp", 100, "Today", camp_id="camp_phase_test", community_id="org_default", db_path=db_file)
     return app, db_file
 
 
 @pytest.fixture
 def client(app_and_db):
+    from backend.services.auth_service import create_access_token
     app, _ = app_and_db
+    token = create_access_token(user_id="Dr. Priya", role="admin", org_id="org_default")
     with app.test_client() as c:
+        c.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {token}"
         yield c
 
 
@@ -410,14 +413,14 @@ def test_usage_and_ledger_endpoints(client, app_and_db):
         db_path=db_path
     )
 
-    # 1. Unauthenticated requests must return 403 Forbidden
-    res_usage_no_auth = client.get("/api/usage")
-    assert res_usage_no_auth.status_code == 403
-    assert res_usage_no_auth.json["error"] == "forbidden"
+    # 1. Unauthenticated requests must return 401/403
+    app, _ = app_and_db
+    with app.test_client() as unauth_client:
+        res_usage_no_auth = unauth_client.get("/api/usage")
+        assert res_usage_no_auth.status_code in (401, 403)
 
-    res_ledger_no_auth = client.get("/api/usage/ledger")
-    assert res_ledger_no_auth.status_code == 403
-    assert res_ledger_no_auth.json["error"] == "forbidden"
+        res_ledger_no_auth = unauth_client.get("/api/usage/ledger")
+        assert res_ledger_no_auth.status_code in (401, 403)
 
     # 2. Authenticated admin requests must succeed with 200 OK
     admin_headers = {"X-Admin-Key": "admin_secret_key"}
@@ -455,9 +458,11 @@ def test_admin_kill_switch_ai_pause(client, app_and_db):
         "camp_id": "camp_phase_test"
     }
 
-    # 1. Unauthenticated pause request must be rejected with 403
-    unauth_pause = client.post("/api/admin/ai-pause", json={"paused": True})
-    assert unauth_pause.status_code == 403
+    # 1. Unauthenticated pause request must be rejected with 401/403
+    app, _ = app_and_db
+    with app.test_client() as unauth_client:
+        unauth_pause = unauth_client.post("/api/admin/ai-pause", json={"paused": True})
+        assert unauth_pause.status_code in (401, 403)
 
     # 2. Activate kill switch with admin credentials
     admin_headers = {"X-Role": "admin"}

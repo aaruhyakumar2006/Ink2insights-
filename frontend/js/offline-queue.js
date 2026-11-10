@@ -38,7 +38,7 @@
  */
 
 const DB_NAME = 'ink2i_offline_queue';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_NAME = 'scan_queue';
 const KEY_STORE = 'crypto_keys';
 
@@ -65,9 +65,40 @@ function openDB() {
         store.createIndex('created_at', 'created_at', { unique: false });
         store.createIndex('camp_id', 'camp_id', { unique: false });
       }
+      if (!db.objectStoreNames.contains(KEY_STORE)) {
+        db.createObjectStore(KEY_STORE, { keyPath: 'name' });
+      }
     };
     req.onsuccess = (e) => resolve(e.target.result);
     req.onerror = (e) => reject(e.target.error);
+  });
+}
+
+function idbGetKey(db, name) {
+  return new Promise((resolve) => {
+    try {
+      if (!db || !db.objectStoreNames.contains(KEY_STORE)) return resolve(null);
+      const tx = db.transaction(KEY_STORE, 'readonly');
+      const req = tx.objectStore(KEY_STORE).get(name);
+      req.onsuccess = (e) => resolve(e.target.result ? e.target.result.key : null);
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+function idbPutKey(db, name, key) {
+  return new Promise((resolve) => {
+    try {
+      if (!db || !db.objectStoreNames.contains(KEY_STORE)) return resolve();
+      const tx = db.transaction(KEY_STORE, 'readwrite');
+      tx.objectStore(KEY_STORE).put({ name, key });
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    } catch {
+      resolve();
+    }
   });
 }
 
@@ -120,30 +151,50 @@ function idbClear(db) {
 // WebCrypto AES-GCM helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function getOrCreateKey() {
-  // Reuse within the same session tab
+async function getOrCreateKey(db = null) {
+  // 1. Check persistent IndexedDB key-store
+  if (db) {
+    const idbStoredKey = await idbGetKey(db, 'main_queue_key');
+    if (idbStoredKey) {
+      try {
+        const raw = Uint8Array.from(atob(idbStoredKey), (c) => c.charCodeAt(0));
+        const imported = await crypto.subtle.importKey(
+          'raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']
+        );
+        try { sessionStorage.setItem(SESSION_KEY_NAME, idbStoredKey); } catch {}
+        return imported;
+      } catch {
+        // Fall through
+      }
+    }
+  }
+
+  // 2. Reuse within the same session tab if available
   const stored = sessionStorage.getItem(SESSION_KEY_NAME);
   if (stored) {
     try {
       const raw = Uint8Array.from(atob(stored), (c) => c.charCodeAt(0));
-      return await crypto.subtle.importKey(
+      const imported = await crypto.subtle.importKey(
         'raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']
       );
+      if (db) await idbPutKey(db, 'main_queue_key', stored);
+      return imported;
     } catch {
       // Fall through to generate new
     }
   }
 
+  // 3. Generate new AES-GCM-256 key and persist
   const key = await crypto.subtle.generateKey(
     { name: 'AES-GCM', length: 256 },
     true,
     ['encrypt', 'decrypt']
   );
 
-  // Export and persist for the lifetime of the browser tab
   const exported = await crypto.subtle.exportKey('raw', key);
   const b64 = btoa(String.fromCharCode(...new Uint8Array(exported)));
-  try { sessionStorage.setItem(SESSION_KEY_NAME, b64); } catch { /* quota */ }
+  try { sessionStorage.setItem(SESSION_KEY_NAME, b64); } catch {}
+  if (db) await idbPutKey(db, 'main_queue_key', b64);
 
   return key;
 }
@@ -210,7 +261,7 @@ export class OfflineQueue {
     }
     try {
       this._db = await openDB();
-      this._key = await getOrCreateKey();
+      this._key = await getOrCreateKey(this._db);
       const queueLength = await idbCount(this._db);
       this._emit('init', { queueLength });
       return { supported: true, queueLength };
@@ -298,11 +349,15 @@ export class OfflineQueue {
             decryptJson(key, entry.enc_meta),
           ]);
         } catch (decErr) {
-          // Cannot decrypt (tab was reloaded — key lost). Purge entry.
           console.warn('[OfflineQueue] Decryption failed for entry', entry.id, decErr);
-          await idbDelete(this._db, entry.id);
-          stats.failed++;
-          this._emit('decrypt_error', { id: entry.id });
+          entry.decrypt_attempts = (entry.decrypt_attempts || 0) + 1;
+          if (entry.decrypt_attempts >= 3) {
+            await idbDelete(this._db, entry.id);
+            stats.failed++;
+            this._emit('decrypt_error', { id: entry.id });
+          } else {
+            await idbPut(this._db, entry);
+          }
           continue;
         }
 

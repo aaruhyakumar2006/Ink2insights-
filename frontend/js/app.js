@@ -3,7 +3,7 @@
  * Connects the phone-first touch UI with Flask REST API & Vision AI.
  */
 
-import { api, offlineQueue, registerOfflineSupport } from './api.js';
+import { api, offlineQueue, registerOfflineSupport, getFileBlobUrl } from './api.js';
 import { DocumentScanner, DEFAULT_QUALITY_FALLBACK } from './scanner.js';
 
 
@@ -33,6 +33,11 @@ const state = {
   missingApprovedOverride: false,
   torchSupported: false
 };
+
+const templateCache = new Map();
+const urlParams = (typeof window !== 'undefined' && window.location) ? new URLSearchParams(window.location.search) : null;
+window.USE_TEMPLATE_UI = (urlParams && urlParams.get('use_template_ui') === '1') ? 1 : (window.USE_TEMPLATE_UI || 0);
+
 
 // Demo Mode & Secure Context Utilities
 export function isServerDemoMode() {
@@ -132,6 +137,9 @@ export function go(screenId, isBack = false) {
 }
 
 export function goBack() {
+  if (state.screen === 'review' && state.activeRecord?.id) {
+    api.unlockRecord(state.activeRecord.id, state.doctorName || 'Attending Physician').catch(() => {});
+  }
   if (state.screenHistory && state.screenHistory.length > 0) {
     const prev = state.screenHistory.pop();
     go(prev, true);
@@ -185,7 +193,7 @@ export function toast(message, isError = false) {
 // --------------------------------------------------------------------------
 
 export function switchAuthTab(tab) {
-  const tabs = ['otp', 'pin', 'email'];
+  const tabs = ['email', 'pin'];  // Removed 'otp'
   tabs.forEach(t => {
     const btn = $(`auth-tab-btn-${t}`);
     const form = $(`auth-form-${t}`);
@@ -252,6 +260,9 @@ export async function loginWithOtp() {
 
   try {
     const res = await api.login({ phone, otp, community_code: commCode });
+    if (res.token) {
+      localStorage.setItem('auth_token', res.token);
+    }
     if (res.doctor) {
       state.doctorName = res.doctor.full_name || 'Dr. ' + phone.slice(-4);
       localStorage.setItem('clinic_doctor_name', state.doctorName);
@@ -294,6 +305,9 @@ export async function loginWithPin() {
 
   try {
     const res = await api.login({ phone: user, pin, community_code: commCode });
+    if (res.token) {
+      localStorage.setItem('auth_token', res.token);
+    }
     state.doctorName = user.startsWith('Dr.') ? user : (res.doctor?.full_name || `Dr. ${user}`);
     localStorage.setItem('clinic_doctor_name', state.doctorName);
     localStorage.setItem('clinic_doctor_pin', pin);
@@ -336,7 +350,30 @@ export async function login() {
   }
 
   try {
+    // If Supabase JS client is available, authenticate with Supabase Auth
+    if (window.supabase && typeof window.supabase.createClient === 'function') {
+      const supabaseUrl = localStorage.getItem('supabase_url');
+      const supabaseAnonKey = localStorage.getItem('supabase_anon_key');
+      if (supabaseUrl && supabaseAnonKey && !window.supabaseClient) {
+        window.supabaseClient = window.supabase.createClient(supabaseUrl, supabaseAnonKey);
+      }
+      if (window.supabaseClient?.auth) {
+        try {
+          const { data: sData } = await window.supabaseClient.auth.signInWithPassword({ email, password });
+          if (sData?.session?.access_token) {
+            localStorage.setItem('auth_token', sData.session.access_token);
+            localStorage.setItem('supabase_access_token', sData.session.access_token);
+          }
+        } catch (sErr) {
+          console.warn('Supabase JS sign in:', sErr);
+        }
+      }
+    }
+
     const res = await api.login({ email, password, community_code: commCode });
+    if (res.token) {
+      localStorage.setItem('auth_token', res.token);
+    }
     const namePart = email.split('@')[0].replace(/[._-]/g, ' ');
     state.doctorName = res.doctor?.full_name || ('Dr. ' + namePart.charAt(0).toUpperCase() + namePart.slice(1));
     localStorage.setItem('clinic_doctor_name', state.doctorName);
@@ -379,6 +416,8 @@ export function promptSignUp() {
 }
 
 export function logout() {
+  localStorage.removeItem('auth_token');
+  localStorage.removeItem('supabase_access_token');
   localStorage.removeItem('clinic_doctor_name');
   localStorage.removeItem('clinic_doctor_email');
   localStorage.removeItem('clinic_doctor_phone');
@@ -389,10 +428,18 @@ export function logout() {
   toast('Signed out of clinical portal.');
 }
 
-export function loginDemo() {
+export async function loginDemo() {
   if (!isDemoMode()) {
     toast('Demo Station is disabled. DEMO_MODE=1 or ?demo=1 required.');
     return;
+  }
+  try {
+    const res = await api.loginDemo();
+    if (res?.token) {
+      localStorage.setItem('auth_token', res.token);
+    }
+  } catch (e) {
+    console.warn('Demo login API call failed:', e);
   }
   state.doctorName = 'Dr. Priya (Demo)';
   localStorage.setItem('clinic_doctor_name', state.doctorName);
@@ -673,8 +720,49 @@ function updateDoctorDisplays() {
 // 3. Home / Dashboard Data & Rendering
 // ==========================================================================
 
+// Render dynamic calendar strip with current week
+function renderCalendarStrip() {
+  const calendarStrip = document.querySelector('.camp-calendar-strip');
+  if (!calendarStrip) return;
+
+  const today = new Date();
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  
+  // Get the current day of week (0 = Sunday, 6 = Saturday)
+  const currentDayOfWeek = today.getDay();
+  
+  // Calculate start of the week (Monday)
+  const startOfWeek = new Date(today);
+  const daysFromMonday = currentDayOfWeek === 0 ? 6 : currentDayOfWeek - 1; // If Sunday, go back 6 days
+  startOfWeek.setDate(today.getDate() - daysFromMonday);
+  
+  // Generate 7 days starting from Monday
+  let html = '';
+  for (let i = 0; i < 7; i++) {
+    const date = new Date(startOfWeek);
+    date.setDate(startOfWeek.getDate() + i);
+    
+    const dayName = dayNames[date.getDay()];
+    const dayNum = date.getDate();
+    const isToday = date.toDateString() === today.toDateString();
+    
+    html += `
+      <div class="date-chip${isToday ? ' active' : ''}">
+        <span class="day">${dayName}</span>
+        <b class="num">${dayNum}</b>
+        ${isToday ? '<span class="camp-dot"></span>' : ''}
+      </div>
+    `;
+  }
+  
+  calendarStrip.innerHTML = html;
+}
+
 export async function renderHome() {
   try {
+    // Render calendar strip with current dates
+    renderCalendarStrip();
+    
     const [campsRes, statsRes, statusRes, recordsRes] = await Promise.all([
       api.getCamps().catch(() => []),
       api.getStats().catch(() => ({ total_camps: 0, total_scanned: 0, to_check: 0, reviewed: 0 })),
@@ -769,9 +857,88 @@ export async function renderHome() {
     // Render Recent Records List
     renderRecentRecords();
 
+    // Rule 4.7: Apply Role-Based Screen & Navigation Layout
+    applyRoleBasedUI();
+
   } catch (err) {
     console.error('Error refreshing home data:', err);
   }
+}
+
+export function getCurrentUserRole() {
+  const token = localStorage.getItem('auth_token');
+  if (!token) return 'doctor';
+  try {
+    const parts = token.split('.');
+    if (parts.length === 3) {
+      const payload = JSON.parse(atob(parts[1]));
+      const role = (payload.app_metadata?.role || payload.role || '').toLowerCase();
+      if (role === 'worker' || role === 'field_worker') return 'field_worker';
+      if (role === 'admin' || role === 'superuser') return 'admin';
+      return 'doctor';
+    }
+  } catch (e) {}
+  return 'doctor';
+}
+
+export function applyRoleBasedUI() {
+  const role = getCurrentUserRole();
+  const isWorker = role === 'field_worker';
+  const isAdmin = role === 'admin';
+
+  // Home Screen toggling (Rule 4.7)
+  const workerSection = $('worker-home-section');
+  const doctorSection = $('doctor-home-section');
+  if (workerSection && doctorSection) {
+    if (isWorker) {
+      workerSection.style.display = 'block';
+      doctorSection.style.display = 'none';
+
+      const todayIso = new Date().toISOString().slice(0, 10);
+      const myRecords = (state.records || []);
+      const myToday = myRecords.filter(r => (r.created_at || '').slice(0, 10) === todayIso);
+      const retakes = myRecords.filter(r => r.status === 'failed' || (r.quality_warning_bypassed && r.quality_warning_bypassed.length > 0));
+
+      if ($('worker-my-scans-count')) $('worker-my-scans-count').textContent = myToday.length;
+      if ($('worker-retake-count')) $('worker-retake-count').textContent = retakes.length;
+      if ($('worker-retake-sub')) $('worker-retake-sub').textContent = `${retakes.length} pending`;
+
+      const retakeList = $('worker-retake-list');
+      if (retakeList) {
+        if (retakes.length === 0) {
+          retakeList.innerHTML = `
+            <div style="padding:16px;text-align:center;color:var(--mute);background:#fff;border-radius:14px;border:1px solid var(--line);font-size:13px;">
+              🎉 All your captured scans are clear! No retakes required.
+            </div>
+          `;
+        } else {
+          retakeList.innerHTML = retakes.map(r => `
+            <div style="padding:12px 14px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:12px;display:flex;justify-content:space-between;align-items:center;">
+              <div>
+                <b style="font-size:14px;color:#92400E;display:block;">${escapeHtml(r.person_name || 'Patient')}</b>
+                <small style="color:#B45309;font-size:11px;">Flagged for blur / clarity issue</small>
+              </div>
+              <button class="btn" style="width:auto;padding:6px 12px;font-size:12px;background:#D97706;" onclick="window.app.startScan()">Retake Scan</button>
+            </div>
+          `).join('');
+        }
+      }
+    } else {
+      workerSection.style.display = 'none';
+      doctorSection.style.display = 'block';
+    }
+  }
+
+  // Navigation icons
+  ['nav-btn-analytics', 'nav-btn-analytics-2', 'nav-btn-analytics-3', 'nav-btn-analytics-4', 'nav-btn-analytics-5'].forEach(id => {
+    const el = $(id);
+    if (el) el.style.display = isWorker ? 'none' : '';
+  });
+
+  // Admin settings sections
+  document.querySelectorAll('.admin-only-section, #settings-admin-billing, #settings-admin-community').forEach(el => {
+    el.style.display = isAdmin ? 'block' : 'none';
+  });
 }
 
 function renderCampsList() {
@@ -974,6 +1141,20 @@ export function updateQualityDebugOnScreen(p1Client, p1Server, p2Client, p2Serve
     modalDebug.textContent = `🔍 [DEBUG ?debug=1] P1 (Client: ${p1Client ?? 'N/A'}, Server: ${p1Server ?? 'N/A'}) · P2 (Client: ${p2Client ?? 'N/A'}, Server: ${p2Server ?? 'N/A'})`;
     modalDebug.style.display = 'block';
   }
+
+  const settingsCard = $('settings-debug-quality-card');
+  if (settingsCard) {
+    const isDebug = typeof window !== 'undefined' && (new URLSearchParams(window.location.search).get('debug') === '1');
+    if (isDebug) {
+      settingsCard.style.display = 'block';
+      const cEl = $('settings-debug-client-sharpness');
+      const sEl = $('settings-debug-server-sharpness');
+      if (cEl) cEl.textContent = `P1: ${p1Client ?? 'N/A'} · P2: ${p2Client ?? 'N/A'}`;
+      if (sEl) sEl.textContent = `P1: ${p1Server ?? 'N/A'} · P2: ${p2Server ?? 'N/A'}`;
+    } else {
+      settingsCard.style.display = 'none';
+    }
+  }
 }
 
 export function showQualityAlertModal(quality, onProceed, onRetake) {
@@ -1097,7 +1278,7 @@ export function closeScan() {
 }
 
 export function takePhotoWithCamera() {
-  const input = $('camera-photo-input') || $('camera-file-input');
+  const input = $('camera-photo-input');
   if (input) {
     input.value = '';
     input.click();
@@ -1105,7 +1286,7 @@ export function takePhotoWithCamera() {
 }
 
 export function uploadFromGallery() {
-  const input = $('camera-gallery-input') || $('camera-file-input');
+  const input = $('camera-gallery-input');
   if (input) {
     input.value = '';
     input.click();
@@ -1318,14 +1499,92 @@ export function swapScanPages() {
   toast('Pages swapped! Slot 1 and Slot 2 exchanged. 🔀');
 }
 
+export function classifyFooterLocally(code, pageType = 'history') {
+  if (!code || typeof code !== 'string') {
+    if (pageType === 'examination') {
+      return { id: 'tpl_adult_examination_v9_1', name: 'Adult Exam v9.1', family: 'adult', matched: true };
+    }
+    return { id: 'tpl_adult_history_v9_1', name: 'Adult History v9.1', family: 'adult', matched: true };
+  }
+  const clean = code.toUpperCase().replace(/\s+/g, ' ');
+  if (clean.includes('ASF-D&A-ACS-9.1') || clean.includes('ACS-9.1')) {
+    return { id: 'tpl_adult_history_v9_1', name: 'Adult History v9.1', family: 'adult', matched: true };
+  }
+  if (clean.includes('ASF-D&A-AC 9.1') || clean.includes('AC 9.1') || clean.includes('AC-9.1')) {
+    return { id: 'tpl_adult_examination_v9_1', name: 'Adult Exam v9.1', family: 'adult', matched: true };
+  }
+  if (clean.includes('ASF-D&A-PCS-9.3') || clean.includes('PCS-9.3')) {
+    return { id: 'tpl_paediatric_history_v9_3', name: 'Paediatric History v9.3', family: 'paediatric', matched: true };
+  }
+  if (clean.includes('ASF-D&A-PCS-9.7') || clean.includes('PCS-9.7')) {
+    return { id: 'tpl_paediatric_examination_v9_7', name: 'Paediatric Exam v9.7', family: 'paediatric', matched: true };
+  }
+  return { id: null, name: 'Unknown Form', family: null, matched: false };
+}
+
+export function showUnsupportedModal() {
+  const modal = $('unsupported-form-modal');
+  if (modal) modal.classList.add('on');
+}
+
+export function dismissUnsupportedModal(retake = false) {
+  const modal = $('unsupported-form-modal');
+  if (modal) modal.classList.remove('on');
+  if (retake) {
+    const sc = getScannerInstance();
+    if (sc) sc.resetAllPages();
+    startScan();
+    toast('Scan cancelled. Please retake photo with clear document footers.');
+    return;
+  }
+  const select = $('unsupported-form-select');
+  const val = (select && select.value) ? select.value : 'tpl_adult_history_v9_1,tpl_adult_examination_v9_1';
+  const parts = val.split(',');
+  state.detectedTemplateIds = parts;
+  state.formFamily = parts[0].includes('paediatric') ? 'paediatric' : 'adult';
+  const t1Badge = $('pairs-t1-badge');
+  const t2Badge = $('pairs-t2-badge');
+  if (t1Badge) {
+    t1Badge.textContent = state.formFamily === 'paediatric' ? 'Paediatric History v9.3' : 'Adult History v9.1';
+    t1Badge.style.display = 'block';
+  }
+  if (t2Badge) {
+    t2Badge.textContent = state.formFamily === 'paediatric' ? 'Paediatric Exam v9.7' : 'Adult Exam v9.1';
+    t2Badge.style.display = 'block';
+  }
+  const familyWarn = $('pairs-family-warning');
+  if (familyWarn) familyWarn.style.display = 'none';
+  toast(`Selected template: ${state.formFamily === 'paediatric' ? 'Paediatric School Health' : 'Adult Comprehensive Health'}`);
+}
+
 function proceedToPairsScreen() {
   const p1 = state.pageUrls[0];
   const p2 = state.pageUrls[1];
 
-  const prev1 = $('pairs-p1-preview');
-  const prev2 = $('pairs-p2-preview');
-  if (prev1 && p1) prev1.style.backgroundImage = `url('${p1}')`;
-  if (prev2 && p2) prev2.style.backgroundImage = `url('${p2}')`;
+  if (prev1 && p1) {
+    prev1.style.backgroundImage = `url('${p1}')`;
+    const isHeic1 = (sc?.pages?.[0]?.name || '').toLowerCase().match(/\.(heic|heif)$/);
+    if (isHeic1 && !prev1.querySelector('.heic-format-indicator')) {
+      const b = document.createElement('div');
+      b.className = 'heic-format-indicator';
+      b.style.cssText = 'position:absolute;bottom:8px;left:8px;background:rgba(0,0,0,0.7);color:#fff;font-size:11px;padding:3px 8px;border-radius:6px;pointer-events:none;';
+      b.textContent = '📸 iPhone HEIC Document';
+      prev1.style.position = 'relative';
+      prev1.appendChild(b);
+    }
+  }
+  if (prev2 && p2) {
+    prev2.style.backgroundImage = `url('${p2}')`;
+    const isHeic2 = (sc?.pages?.[1]?.name || '').toLowerCase().match(/\.(heic|heif)$/);
+    if (isHeic2 && !prev2.querySelector('.heic-format-indicator')) {
+      const b = document.createElement('div');
+      b.className = 'heic-format-indicator';
+      b.style.cssText = 'position:absolute;bottom:8px;left:8px;background:rgba(0,0,0,0.7);color:#fff;font-size:11px;padding:3px 8px;border-radius:6px;pointer-events:none;';
+      b.textContent = '📸 iPhone HEIC Document';
+      prev2.style.position = 'relative';
+      prev2.appendChild(b);
+    }
+  }
 
   // Page 1 vs Page 2 Slot Swap Heuristic
   const sc = getScannerInstance();
@@ -1338,6 +1597,47 @@ function proceedToPairsScreen() {
   const swapAlert = $('pairs-swap-alert');
   if (swapAlert) {
     swapAlert.style.display = (p0IsP2 && p1IsP1) ? 'block' : 'none';
+  }
+
+  // Template Classification & Badges (Task 5 Phase 2)
+  const t1Badge = $('pairs-t1-badge');
+  const t2Badge = $('pairs-t2-badge');
+  const familyWarn = $('pairs-family-warning');
+  const familyWarnMsg = $('pairs-family-warning-msg');
+
+  const p0Meta = (sc && sc.pages && sc.pages[0]) || {};
+  const p1Meta = (sc && sc.pages && sc.pages[1]) || {};
+  const f0Code = p0Meta.footer_code || p0Meta.footerCode || '';
+  const f1Code = p1Meta.footer_code || p1Meta.footerCode || '';
+
+  const t1 = classifyFooterLocally(f0Code, 'history');
+  const t2 = classifyFooterLocally(f1Code, 'examination');
+
+  state.detectedTemplateIds = [t1.id, t2.id];
+  state.formFamily = t1.family || t2.family || 'adult';
+
+  if (t1Badge) {
+    t1Badge.textContent = t1.name;
+    t1Badge.style.display = 'block';
+  }
+  if (t2Badge) {
+    t2Badge.textContent = t2.name;
+    t2Badge.style.display = 'block';
+  }
+
+  // Mixed-family warning
+  if (t1.family && t2.family && t1.family !== t2.family) {
+    if (familyWarn) familyWarn.style.display = 'block';
+    if (familyWarnMsg) {
+      familyWarnMsg.textContent = `Warning: Slot 1 is from ${t1.family} family while Slot 2 is from ${t2.family} family. Please verify both pages belong to the same form set.`;
+    }
+  } else if (familyWarn) {
+    familyWarn.style.display = 'none';
+  }
+
+  // Unknown footer modal trigger
+  if ((f0Code && !t1.matched) || (f1Code && !t2.matched)) {
+    showUnsupportedModal();
   }
 
   // Populate Camp Dropdown & Datalist in Pairs
@@ -1511,7 +1811,8 @@ export async function saveAndExtract() {
 
   try {
     toast('Transcribing document pages with Vision AI…');
-    const extractRes = await api.extractPages(p1, p2, campId, state.qualityBypassed);
+    const templateIds = state.detectedTemplateIds || ['tpl_adult_history_v9_1', 'tpl_adult_examination_v9_1'];
+    const extractRes = await api.extractPages(p1, p2, campId, state.qualityBypassed, templateIds);
 
     // Debug line comparing client and server blur scores for the same photo
     const clientBlurP1 = (state.clientPageQualities && state.clientPageQualities[0]) ? state.clientPageQualities[0].blur_score : 'N/A';
@@ -1548,9 +1849,16 @@ export async function saveAndExtract() {
 
     // Build the record payload with extracted structured data
     const personName = nameInput || ext.person_name || 'Patient';
+    const tplPrimary = (templateIds && templateIds[0]) || 'tpl_adult_history_v9_1';
+    const isPaed = tplPrimary.includes('paediatric') || state.formFamily === 'paediatric';
     const recordPayload = {
       camp_id: campId,
       person_name: personName,
+      template_id: tplPrimary,
+      template_version: isPaed ? '9.3' : '9.1',
+      form_family: isPaed ? 'paediatric' : 'adult',
+      target_group: isPaed ? 'paediatric' : 'adult',
+      is_paediatric: isPaed ? 1 : 0,
       age: ext.age || '',
       gender: ext.gender || '',
       height: ext.height || '',
@@ -1651,11 +1959,19 @@ export async function openReview(recordId) {
       tag.className = record.status === 'reviewed' ? 'tag' : 'tag w';
     }
 
-    // Source Document Images
+    // Source Document Images (Rule 10.3: Authenticated Blob URLs)
     const p1Img = $('review-p1-img');
     const p2Img = $('review-p2-img');
-    if (p1Img) p1Img.src = record.page1_preview || '';
-    if (p2Img) p2Img.src = record.page2_preview || '';
+    if (p1Img && record.page1_preview) {
+      getFileBlobUrl(record.page1_preview).then(src => { if (p1Img) p1Img.src = src; });
+    } else if (p1Img) {
+      p1Img.src = '';
+    }
+    if (p2Img && record.page2_preview) {
+      getFileBlobUrl(record.page2_preview).then(src => { if (p2Img) p2Img.src = src; });
+    } else if (p2Img) {
+      p2Img.src = '';
+    }
 
     // Optical Quality Bypassed Telemetry
     const qualAlert = $('review-quality-bypassed-alert');
@@ -1670,7 +1986,228 @@ export async function openReview(recordId) {
       }
     }
 
-    // Populate Fields from structured_record
+    // Concurrency Lock: Try locking record for current reviewing doctor
+    const lockAlert = $('review-lock-alert');
+    const lockMsg = $('review-lock-msg');
+    try {
+      const lockRes = await api.lockRecord(recordId, state.doctorName || 'Attending Physician');
+      if (lockRes && lockRes.locked && lockRes.locked_by && lockRes.locked_by !== (state.doctorName || 'Attending Physician')) {
+        if (lockAlert) lockAlert.style.display = 'flex';
+        if (lockMsg) lockMsg.textContent = `🔒 Concurrency Notice: Record is locked for review by ${lockRes.locked_by}. Concurrent edits may be overwritten.`;
+      } else if (lockAlert) {
+        lockAlert.style.display = 'none';
+      }
+    } catch (e) {
+      console.warn('Could not acquire record lock:', e);
+      if (lockAlert) lockAlert.style.display = 'none';
+    }
+
+    // Phase 5: Dynamic review screen integration gated by USE_TEMPLATE_UI=1
+    if (window.USE_TEMPLATE_UI === 1 && record.template_id) {
+      await renderDynamicTemplateReview(record);
+    } else {
+      renderStaticReview(record);
+    }
+
+    checkDuplicatePatient();
+    go('review');
+
+  } catch (err) {
+    toast('Error loading record: ' + err.message, true);
+  }
+}
+
+export function switchDynamicReviewTab(tabKey) {
+  const tabs = document.querySelectorAll('#dynamic-review-tabs .review-tab-btn');
+  tabs.forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-tab') === tabKey);
+  });
+  const secs = document.querySelectorAll('#dynamic-review-content .review-section');
+  secs.forEach(sec => {
+    sec.classList.toggle('active', sec.getAttribute('data-tab') === tabKey);
+  });
+}
+
+export async function renderDynamicTemplateReview(record) {
+  const dynTabsContainer = $('dynamic-review-tabs');
+  const dynContentContainer = $('dynamic-review-content');
+  const staticTabs = $('static-review-tabs');
+  const staticSecs = ['personal', 'medical', 'family', 'health', 'system', 'vision', 'referral'];
+
+  try {
+    let tpl = templateCache.get(record.template_id);
+    if (!tpl) {
+      tpl = await api.getTemplate(record.template_id, true);
+      if (tpl) templateCache.set(record.template_id, tpl);
+    }
+
+    if (!tpl || (!tpl.tabs && !tpl.sections)) {
+      throw new Error('Template schema not available');
+    }
+
+    // Hide static review elements
+    if (staticTabs) staticTabs.style.display = 'none';
+    staticSecs.forEach(k => {
+      const s = $(`rsec-${k}`);
+      if (s) s.style.display = 'none';
+    });
+
+    // Show dynamic elements
+    if (dynTabsContainer) dynTabsContainer.style.display = 'flex';
+    if (dynContentContainer) dynContentContainer.style.display = 'block';
+
+    const tabs = tpl.tabs || tpl.sections || [];
+    const currentRole = getCurrentUserRole();
+    const isFieldWorker = currentRole === 'field_worker';
+    const identityKeys = new Set([
+      'person_name', 'name', 'full_name', 'age', 'gender', 'dob', 'date_of_birth',
+      'mobile_number', 'mobile', 'phone', 'address', 'admission_id', 'moc_doc_id',
+      'id_num', 'institution_name', 'affiliation_type', 'year_of_study',
+      'course_department', 'section', 'shift', 'guardian_spouse_name', 'marital_status',
+      'father_name', 'mother_name', 'class', 'roll_number'
+    ]);
+
+    // Build Tab Buttons
+    if (dynTabsContainer) {
+      dynTabsContainer.innerHTML = tabs.map((tab, idx) => `
+        <button class="review-tab-btn ${idx === 0 ? 'active' : ''}" 
+                data-tab="${escapeHtml(tab.id)}" 
+                id="dytab-${escapeHtml(tab.id)}" 
+                onclick="window.app.switchDynamicReviewTab('${escapeHtml(tab.id)}')">
+          ${idx + 1}. ${escapeHtml(tab.title || tab.id)}
+        </button>
+      `).join('');
+    }
+
+    // Value helper
+    const getDynVal = (key) => {
+      if (record.attributes && record.attributes[key] !== undefined && record.attributes[key] !== null) {
+        return record.attributes[key];
+      }
+      if (record[key] !== undefined && record[key] !== null) {
+        return record[key];
+      }
+      const sr = record.structured_record || {};
+      for (const grp of Object.values(sr)) {
+        if (grp && typeof grp === 'object' && grp[key] !== undefined) {
+          const v = grp[key];
+          if (typeof v === 'object' && v !== null && v.value !== undefined) return v.value;
+          return v;
+        }
+      }
+      return '';
+    };
+
+    const uncertainList = record.uncertain_fields || [];
+
+    // Build Section Contents
+    if (dynContentContainer) {
+      dynContentContainer.innerHTML = tabs.map((tab, idx) => {
+        const fieldsHtml = (tab.fields || []).map(f => {
+          const rawVal = getDynVal(f.key);
+          const valStr = rawVal !== null && rawVal !== undefined ? String(rawVal) : '';
+          const isUncertain = uncertainList.includes(f.key);
+          const isIdentity = identityKeys.has(f.key);
+          const isReadOnly = isFieldWorker && !isIdentity;
+          const disAttr = isReadOnly ? 'disabled style="opacity:0.6; cursor:not-allowed; background:#f1f5f9;"' : '';
+          const reqAttr = f.required ? 'required' : '';
+          const warnBadge = isUncertain 
+            ? `<span class="field-badge-warn" style="display:inline-flex; margin-left:6px;">Check value</span>` 
+            : '';
+
+          let inputWidget = '';
+          const fType = (f.type || 'text').toLowerCase();
+
+          if (['option_list', 'select', 'single_choice'].includes(fType) && Array.isArray(f.options) && f.options.length > 0) {
+            const opts = f.options.map(opt => {
+              const sel = opt === valStr ? 'selected' : '';
+              return `<option value="${escapeHtml(opt)}" ${sel}>${escapeHtml(opt)}</option>`;
+            }).join('');
+            inputWidget = `<select class="form-control" id="dyn-field-${escapeHtml(f.key)}" ${disAttr}>
+              <option value="">-- Select --</option>
+              ${opts}
+            </select>`;
+          } else if (fType === 'boolean' || fType === 'signature_present') {
+            const isChecked = ['yes', 'true', '1', 'present', 'signed'].includes(valStr.toLowerCase());
+            inputWidget = `
+              <div style="display:flex; align-items:center; gap:8px; margin-top:4px;">
+                <input type="checkbox" id="dyn-field-${escapeHtml(f.key)}" ${isChecked ? 'checked' : ''} ${disAttr} style="width:18px;height:18px;accent-color:#16A34A;cursor:pointer;">
+                <span style="font-size:13px; color:var(--ink);">${escapeHtml(f.label || f.key)}</span>
+              </div>
+            `;
+          } else if (fType === 'free_text' || fType === 'textarea') {
+            inputWidget = `<textarea class="form-control" id="dyn-field-${escapeHtml(f.key)}" rows="3" ${disAttr} ${reqAttr} placeholder="${escapeHtml(f.label || '')}">${escapeHtml(valStr)}</textarea>`;
+          } else if (fType === 'number') {
+            inputWidget = `<input type="number" class="form-control" id="dyn-field-${escapeHtml(f.key)}" value="${escapeHtml(valStr)}" ${disAttr} ${reqAttr} placeholder="${escapeHtml(f.label || '')}">`;
+          } else if (fType === 'date') {
+            inputWidget = `<input type="text" class="form-control" id="dyn-field-${escapeHtml(f.key)}" value="${escapeHtml(valStr)}" placeholder="DD/MM/YYYY" ${disAttr} ${reqAttr}>`;
+          } else {
+            inputWidget = `<input type="text" class="form-control" id="dyn-field-${escapeHtml(f.key)}" value="${escapeHtml(valStr)}" ${disAttr} ${reqAttr} placeholder="${escapeHtml(f.label || '')}">`;
+          }
+
+          return `
+            <div style="margin-bottom:14px;">
+              <label for="dyn-field-${escapeHtml(f.key)}" style="display:flex; align-items:center; justify-content:space-between; font-size:12.5px; font-weight:600; color:var(--ink); margin-bottom:4px;">
+                <span>${escapeHtml(f.label || f.key)} ${f.required ? '<span style="color:#DC2626;">*</span>' : ''}</span>
+                ${warnBadge}
+              </label>
+              ${inputWidget}
+            </div>
+          `;
+        }).join('');
+
+        return `
+          <div class="review-section ${idx === 0 ? 'active' : ''}" id="dyn-sec-${escapeHtml(tab.id)}" data-tab="${escapeHtml(tab.id)}">
+            <h4 style="margin:0 0 14px; font-size:14px; color:var(--ink);">${escapeHtml(tab.title || tab.id)}</h4>
+            ${fieldsHtml}
+          </div>
+        `;
+      }).join('');
+    }
+
+    // Role adaptation for Approve button
+    const apprBtn = $('approve-btn');
+    if (apprBtn) {
+      apprBtn.style.display = '';
+      if (isFieldWorker) {
+        apprBtn.innerHTML = `
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+          Approve & Complete
+        `;
+      } else {
+        apprBtn.innerHTML = `
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+          Approve & Bill Paper
+        `;
+      }
+    }
+
+    if (tabs.length > 0) {
+      switchDynamicReviewTab(tabs[0].id);
+    }
+    return true;
+  } catch (err) {
+    console.warn('Dynamic template review rendering failed, falling back to static review tabs:', err);
+    renderStaticReview(record);
+    return false;
+  }
+}
+
+export function renderStaticReview(record) {
+  const dynTabsContainer = $('dynamic-review-tabs');
+  const dynContentContainer = $('dynamic-review-content');
+  const staticTabs = $('static-review-tabs');
+  const staticSecs = ['personal', 'medical', 'family', 'health', 'system', 'vision', 'referral'];
+
+  if (dynTabsContainer) dynTabsContainer.style.display = 'none';
+  if (dynContentContainer) dynContentContainer.style.display = 'none';
+  if (staticTabs) staticTabs.style.display = 'flex';
+  staticSecs.forEach(k => {
+    const s = $(`rsec-${k}`);
+    if (s) s.style.display = '';
+  });
+
+  // Populate Fields from structured_record
     const sr = record.structured_record || {};
     const p_info = sr.personal_information || {};
     const m_hist = sr.medical_history || {};
@@ -1712,6 +2249,8 @@ export async function openReview(recordId) {
     if ($('rev-pulse')) $('rev-pulse').value = getVal(h_asmt, 'pulse_bpm', '');
     if ($('rev-rbs')) $('rev-rbs').value = getVal(h_asmt, 'random_blood_sugar_mgdl', '');
     if ($('rev-waist')) $('rev-waist').value = getVal(h_asmt, 'waist_circumference_cm', '');
+    const paedData = sr.paediatric_growth || sr.paediatric_screening || {};
+    if ($('rev-atr')) $('rev-atr').value = getVal(paedData, 'atr_degrees', getVal(h_asmt, 'atr_degrees', ''));
 
     // Tab 2: Medical
     const formatMed = (k) => {
@@ -1785,13 +2324,57 @@ export async function openReview(recordId) {
     // Focused Bounding Box Crop rendering
     renderFocusedCropSnippets(record);
 
-    switchReviewTab('personal');
-    go('review');
+    // Rule 4.8: For field_worker, clinical fields are read-only (visibly disabled)
+    const currentRole = getCurrentUserRole();
+    const isFieldWorker = currentRole === 'field_worker';
+    const identityInputs = new Set([
+      'rev-name', 'rev-age', 'rev-gender', 'rev-dob', 'rev-mobile',
+      'rev-address', 'rev-id-num', 'rev-institution', 'rev-class', 'rev-section', 'rev-roll'
+    ]);
 
-  } catch (err) {
-    toast('Error loading record: ' + err.message, true);
-  }
+    const reviewInputs = document.querySelectorAll('#review-screen input, #review-screen select, #review-screen textarea');
+    reviewInputs.forEach(el => {
+      if (!el.id) return;
+      if (isFieldWorker) {
+        if (!identityInputs.has(el.id)) {
+          el.disabled = true;
+          el.style.opacity = '0.6';
+          el.style.cursor = 'not-allowed';
+          el.style.backgroundColor = '#f1f5f9';
+        } else {
+          el.disabled = false;
+          el.style.opacity = '1';
+          el.style.cursor = '';
+          el.style.backgroundColor = '';
+        }
+      } else {
+        el.disabled = false;
+        el.style.opacity = '1';
+        el.style.cursor = '';
+        el.style.backgroundColor = '';
+      }
+    });
+
+    const apprBtn = $('approve-btn');
+    if (apprBtn) {
+      apprBtn.style.display = '';
+      if (isFieldWorker) {
+        apprBtn.innerHTML = `
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+          Approve & Complete
+        `;
+      } else {
+        apprBtn.innerHTML = `
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+          Approve & Bill Paper
+        `;
+      }
+    }
+
+    
+  switchReviewTab('personal');
 }
+
 
 export function onConsentChanged() {
   const isConsentGiven = $('rev-consent-screening')?.checked ?? true;
@@ -1849,8 +2432,139 @@ export function renderFocusedCropSnippets(record) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Paediatric Screening Tables (IAP 2015 LMS + AAP CPG 2017 BP Reference)
+// ---------------------------------------------------------------------------
+
+const IAP_LMS_BMI = {
+  'M': {
+    2:  [-0.3521, 16.4370, 0.08262],
+    3:  [-0.4855, 15.9731, 0.08090],
+    4:  [-0.6164, 15.6265, 0.07938],
+    5:  [-0.6498, 15.4425, 0.07777],
+    6:  [-1.1623, 15.4176, 0.08007],
+    7:  [-1.5696, 15.4654, 0.08268],
+    8:  [-1.9218, 15.6398, 0.08568],
+    9:  [-2.1422, 15.9090, 0.08963],
+    10: [-2.2032, 16.2531, 0.09316],
+    11: [-2.1760, 16.7030, 0.09645],
+    12: [-2.0652, 17.2190, 0.09942],
+    13: [-1.9057, 17.7574, 0.10154],
+    14: [-1.7480, 18.3241, 0.10295],
+    15: [-1.6090, 18.8498, 0.10352],
+    16: [-1.5135, 19.3057, 0.10329],
+    17: [-1.4735, 19.6930, 0.10260],
+    18: [-1.5044, 19.9925, 0.10137],
+  },
+  'F': {
+    2:  [-0.3833, 16.0280, 0.08101],
+    3:  [-0.5094, 15.5253, 0.07969],
+    4:  [-0.6355, 15.2073, 0.07963],
+    5:  [-0.8534, 15.0957, 0.08019],
+    6:  [-1.3793, 15.2278, 0.08271],
+    7:  [-1.7606, 15.4562, 0.08600],
+    8:  [-2.0247, 15.8252, 0.09017],
+    9:  [-2.2107, 16.3186, 0.09418],
+    10: [-2.2980, 16.9076, 0.09714],
+    11: [-2.2726, 17.5509, 0.09918],
+    12: [-2.1577, 18.1952, 0.10003],
+    13: [-1.9899, 18.7945, 0.09999],
+    14: [-1.8321, 19.2974, 0.09999],
+    15: [-1.7052, 19.6956, 0.09984],
+    16: [-1.6167, 19.9748, 0.09953],
+    17: [-1.5768, 20.1515, 0.09938],
+    18: [-1.6004, 20.2212, 0.09958],
+  }
+};
+
+const PAED_BP_REF = {
+  'M': {
+    1:  [85, 98, 102, 40, 52, 54],
+    2:  [87, 101, 105, 42, 54, 58],
+    3:  [88, 102, 105, 44, 56, 60],
+    4:  [89, 102, 106, 46, 58, 62],
+    5:  [90, 103, 107, 48, 60, 63],
+    6:  [91, 104, 108, 50, 62, 65],
+    7:  [92, 105, 109, 52, 64, 67],
+    8:  [94, 107, 111, 54, 66, 69],
+    9:  [95, 109, 113, 55, 67, 70],
+    10: [97, 111, 115, 57, 68, 72],
+    11: [99, 113, 117, 58, 70, 74],
+    12: [101, 115, 119, 59, 72, 75],
+    13: [104, 117, 121, 60, 73, 76],
+    14: [106, 120, 124, 60, 73, 76],
+    15: [109, 122, 126, 61, 74, 77],
+    16: [111, 125, 129, 63, 75, 78],
+    17: [114, 127, 131, 65, 77, 80],
+  },
+  'F': {
+    1:  [84, 97, 101, 41, 53, 57],
+    2:  [85, 98, 102, 43, 56, 59],
+    3:  [86, 100, 104, 44, 57, 61],
+    4:  [88, 101, 105, 46, 59, 62],
+    5:  [89, 102, 106, 48, 61, 64],
+    6:  [91, 104, 108, 50, 62, 65],
+    7:  [93, 106, 110, 52, 63, 66],
+    8:  [95, 108, 112, 53, 65, 68],
+    9:  [96, 110, 114, 55, 67, 70],
+    10: [98, 112, 116, 56, 68, 71],
+    11: [100, 114, 118, 57, 69, 72],
+    12: [102, 116, 120, 58, 71, 74],
+    13: [104, 117, 121, 60, 72, 75],
+    14: [105, 118, 122, 61, 73, 76],
+    15: [107, 120, 124, 62, 74, 77],
+    16: [108, 121, 125, 63, 75, 78],
+    17: [108, 122, 126, 64, 76, 79],
+  }
+};
+
+function normCdf(z) {
+  const t = 1.0 / (1.0 + 0.2316419 * Math.abs(z));
+  const poly = t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+  const p = 1.0 - 0.3989422803601 * Math.exp(-0.5 * z * z) * poly;
+  return z >= 0 ? p : 1.0 - p;
+}
+
+let duplicateCheckTimeout = null;
+export async function checkDuplicatePatient() {
+  const alertEl = $('alert-duplicate-patient');
+  const alertMsg = $('alert-duplicate-patient-msg');
+  if (!alertEl) return;
+
+  const name = ($('rev-name')?.value || '').trim();
+  const phone = ($('rev-mobile')?.value || '').trim();
+  const campId = state.activeRecord?.camp_id || state.selectedCampId || '';
+  const currentRecordId = state.activeRecord?.id;
+
+  if (!name || name.length < 3 || !campId) {
+    alertEl.style.display = 'none';
+    return;
+  }
+
+  clearTimeout(duplicateCheckTimeout);
+  duplicateCheckTimeout = setTimeout(async () => {
+    try {
+      const res = await api.checkDuplicate(campId, name, phone, currentRecordId);
+      if (res && res.has_duplicate && res.existing_record) {
+        alertEl.style.display = 'block';
+        const ex = res.existing_record;
+        if (alertMsg) {
+          alertMsg.innerHTML = `
+            <b>Potential Duplicate:</b> Patient <b>"${escapeHtml(ex.person_name)}"</b> (Record <code>${escapeHtml(ex.id)}</code>, ${ex.gender || ''} ${ex.age ? `${ex.age}y` : ''}) was already scanned in this camp on ${ex.created_at ? ex.created_at.slice(0, 10) : 'today'}. Please verify this is not a duplicate intake.
+          `;
+        }
+      } else {
+        alertEl.style.display = 'none';
+      }
+    } catch (e) {
+      console.warn('Duplicate check error:', e);
+    }
+  }, 350);
+}
+
 export function onVitalsChanged() {
   updateReviewClinicalAlerts();
+  checkDuplicatePatient();
 }
 
 export function updateReviewClinicalAlerts(record) {
@@ -1859,12 +2573,16 @@ export function updateReviewClinicalAlerts(record) {
 
   const heightVal = parseFloat($('rev-height')?.value || (record && record.height) || 0);
   const weightVal = parseFloat($('rev-weight')?.value || (record && record.weight) || 0);
-  const ageVal = parseInt($('rev-age')?.value || (record && record.age) || 0, 10);
+  const ageVal = parseFloat($('rev-age')?.value || (record && record.age) || 0);
   const bpVal = ($('rev-bp')?.value || (record && record.blood_pressure) || '').trim();
+  const rawGender = ($('rev-gender')?.value || (record && record.gender) || '').trim().toUpperCase();
+  const sexNorm = (rawGender.startsWith('F') || rawGender.startsWith('G') || rawGender.startsWith('W')) ? 'F' : 'M';
+  const atrVal = parseFloat($('rev-atr')?.value || (record && (record.atr || (record.structured_record && record.structured_record.paediatric_growth && record.structured_record.paediatric_growth.atr_degrees))) || 0);
 
   let hasAnyAlert = false;
+  const isPaed = (record && record.is_paediatric) || (!isNaN(ageVal) && ageVal > 0 && ageVal < 18);
 
-  // 1. Live BMI Calculation & High BMI Staging
+  // 1. Live BMI Calculation
   const bmiPill = $('rev-calculated-bmi');
   const alertBmi = $('alert-high-bmi');
   const bmiBadge = $('bmi-alert-badge');
@@ -1873,7 +2591,7 @@ export function updateReviewClinicalAlerts(record) {
   const pediatricNote = $('bmi-pediatric-note');
 
   let calculatedBmi = null;
-  if (heightVal > 40 && weightVal > 2) {
+  if (heightVal > 30 && weightVal > 1) {
     const heightMeters = heightVal / 100;
     calculatedBmi = parseFloat((weightVal / (heightMeters * heightMeters)).toFixed(1));
   }
@@ -1906,99 +2624,247 @@ export function updateReviewClinicalAlerts(record) {
       bmiPill.style.color = pillColor;
       bmiPill.style.background = pillBg;
     }
-
-    // High BMI Clinical Triage Alert (>= 25.0 kg/m² for Asian-Indian / WHO)
-    if (calculatedBmi >= 25.0) {
-      hasAnyAlert = true;
-      if (alertBmi) alertBmi.style.display = 'block';
-      if (bmiBadge) bmiBadge.textContent = `${calculatedBmi} kg/m²`;
-      if (calculatedBmi >= 30.0) {
-        if (bmiTitle) bmiTitle.textContent = 'Severe Obesity Alert (BMI ≥ 30)';
-        if (bmiDesc) bmiDesc.textContent = 'Patient BMI is in the Severe Obese category. Dietary counseling, endocrine workup and metabolic screening indicated.';
-      } else {
-        if (bmiTitle) bmiTitle.textContent = 'High BMI / Overweight Alert (BMI ≥ 25)';
-        if (bmiDesc) bmiDesc.textContent = 'Patient exceeds healthy Asian-Indian cutoffs (≥25 kg/m²). Nutritional guidance and lifestyle intervention advised.';
-      }
-
-      if (pediatricNote) {
-        pediatricNote.style.display = (ageVal > 0 && ageVal <= 18) ? 'block' : 'none';
-      }
-    } else {
-      if (alertBmi) alertBmi.style.display = 'none';
-    }
   } else {
     if (bmiPill) {
       bmiPill.textContent = '-- kg/m²';
       bmiPill.style.color = '#0284C7';
       bmiPill.style.background = '#E0F2FE';
     }
-    if (alertBmi) alertBmi.style.display = 'none';
   }
 
-  // 2. Hypertension / Blood Pressure Alert
-  const alertBp = $('alert-hypertension');
-  const bpTitle = $('bp-alert-title');
-  const bpBadge = $('bp-alert-badge');
-  const bpDesc = $('bp-alert-desc');
+  // 2. PAEDIATRIC ENGINE vs ADULT ENGINE
+  const paedGrowthCard = $('paediatric-growth-card');
+  const alertPaediatric = $('alert-paediatric-screening');
+  const paedAlertsDesc = $('paediatric-alerts-desc');
+  const paedBadge = $('paediatric-alerts-badge');
+  let currentPaedAlerts = [];
 
-  if (bpVal) {
-    const parts = bpVal.replace(/[^0-9/]/g, '').split('/');
-    const sys = parseInt(parts[0], 10);
-    const dia = parts[1] ? parseInt(parts[1], 10) : null;
-
-    if (!isNaN(sys)) {
-      if (sys >= 180 || (dia && dia >= 120)) {
-        hasAnyAlert = true;
-        if (alertBp) {
-          alertBp.style.display = 'block';
-          alertBp.classList.add('hypertensive-crisis-pulse');
-        }
-        if (bpTitle) bpTitle.textContent = '🚨 Hypertensive Crisis / Critical BP';
-        if (bpBadge) {
-          bpBadge.textContent = `${sys}/${dia || '--'} mmHg`;
-          bpBadge.style.background = '#DC2626';
-        }
-        if (bpDesc) bpDesc.textContent = 'Critically elevated BP (Systolic ≥ 180 or Diastolic ≥ 120). Recheck immediately and provide urgent medical referral.';
-      } else if (sys >= 140 || (dia && dia >= 90)) {
-        hasAnyAlert = true;
-        if (alertBp) {
-          alertBp.style.display = 'block';
-          alertBp.classList.remove('hypertensive-crisis-pulse');
-        }
-        if (bpTitle) bpTitle.textContent = 'Stage 2 Hypertension Alert';
-        if (bpBadge) {
-          bpBadge.textContent = `${sys}/${dia || '--'} mmHg`;
-          bpBadge.style.background = '#D97706';
-        }
-        if (bpDesc) bpDesc.textContent = 'Blood pressure ≥ 140/90 mmHg. Clinical review and specialist follow-up consultation recommended.';
-      } else if (sys >= 130 || (dia && dia >= 80)) {
-        hasAnyAlert = true;
-        if (alertBp) {
-          alertBp.style.display = 'block';
-          alertBp.classList.remove('hypertensive-crisis-pulse');
-        }
-        if (bpTitle) bpTitle.textContent = 'Stage 1 Hypertension / Elevated BP';
-        if (bpBadge) {
-          bpBadge.textContent = `${sys}/${dia || '--'} mmHg`;
-          bpBadge.style.background = '#F59E0B';
-        }
-        if (bpDesc) bpDesc.textContent = 'Blood pressure in pre-hypertensive / Stage 1 range. Routine follow-up suggested.';
-      } else {
-        if (alertBp) {
-          alertBp.style.display = 'none';
-          alertBp.classList.remove('hypertensive-crisis-pulse');
-        }
-      }
-    } else {
-      if (alertBp) {
-        alertBp.style.display = 'none';
-        alertBp.classList.remove('hypertensive-crisis-pulse');
+  if (isPaed) {
+    // Show Paediatric Card
+    if (paedGrowthCard) {
+      paedGrowthCard.style.display = 'block';
+      const sub = $('paediatric-growth-subtitle');
+      if (sub) {
+        sub.textContent = `Age ${Math.round(ageVal)}y • ${sexNorm === 'F' ? 'Girl' : 'Boy'} Growth Profile`;
       }
     }
+
+    // Hide adult-specific alert cards to avoid contradictory adult staging
+    if (alertBmi) alertBmi.style.display = 'none';
+
+    // A. IAP BMI-for-Age Percentile Evaluation
+    const ageInt = Math.min(18, Math.max(2, Math.round(ageVal)));
+    const lms = IAP_LMS_BMI[sexNorm]?.[ageInt];
+
+    if (calculatedBmi && lms) {
+      const [L, M, S] = lms;
+      let centile = 50;
+      try {
+        const z = (L === 0) ? (Math.log(calculatedBmi / M) / S) : (((Math.pow(calculatedBmi / M, L)) - 1.0) / (L * S));
+        centile = normCdf(z) * 100.0;
+      } catch (e) {
+        centile = 50;
+      }
+      centile = Math.max(0.1, Math.min(99.9, centile));
+
+      const centileBadge = $('paediatric-bmi-centile-badge');
+      const nutCat = $('paediatric-nutrition-category');
+      const prog = $('paediatric-centile-progress');
+
+      if (centileBadge) centileBadge.textContent = `${centile.toFixed(1)}th Centile`;
+      if (prog) prog.style.width = `${centile.toFixed(1)}%`;
+
+      let categoryName = 'Normal Growth';
+      let catColor = '#16A34A';
+
+      if (centile < 3.0) {
+        categoryName = 'Severely Thin (SAM)';
+        catColor = '#DC2626';
+        currentPaedAlerts.push(`BMI Alert [CRITICAL]: Severely Thin (<3rd centile: ${centile.toFixed(1)}th, BMI ${calculatedBmi})`);
+      } else if (centile < 15.0) {
+        categoryName = 'Moderately Thin (MAM)';
+        catColor = '#D97706';
+        currentPaedAlerts.push(`BMI Alert [HIGH]: Moderately Thin (3rd-14.9th centile: ${centile.toFixed(1)}th, BMI ${calculatedBmi})`);
+      } else if (centile < 85.0) {
+        categoryName = 'Normal Weight';
+        catColor = '#16A34A';
+      } else if (centile < 95.0) {
+        categoryName = 'Overweight';
+        catColor = '#EA580C';
+        currentPaedAlerts.push(`BMI Alert [ADVISORY]: Overweight (85th-94.9th centile: ${centile.toFixed(1)}th, BMI ${calculatedBmi})`);
+      } else {
+        categoryName = 'Obese';
+        catColor = '#DC2626';
+        currentPaedAlerts.push(`BMI Alert [HIGH]: Obese (≥95th centile: ${centile.toFixed(1)}th, BMI ${calculatedBmi})`);
+      }
+
+      if (nutCat) {
+        nutCat.textContent = categoryName;
+        nutCat.style.color = catColor;
+      }
+
+      state.lastPaediatricResult = {
+        paediatric_calculated_bmi: calculatedBmi,
+        paediatric_bmi_classification: {
+          centile: parseFloat(centile.toFixed(1)),
+          category: categoryName,
+          age_used: ageInt,
+          sex_used: sexNorm
+        }
+      };
+    }
+
+    // B. Paediatric BP-for-Height Percentile Staging
+    const bpAgeInt = Math.min(17, Math.max(1, Math.round(ageVal)));
+    const bpRefRow = PAED_BP_REF[sexNorm]?.[bpAgeInt];
+    const alertBp = $('alert-hypertension');
+    if (alertBp) alertBp.style.display = 'none'; // Replaced by paediatric card
+
+    if (bpVal && bpRefRow) {
+      const parts = bpVal.replace(/[^0-9/]/g, '').split('/');
+      const sys = parseInt(parts[0], 10);
+      const dia = parts[1] ? parseInt(parts[1], 10) : null;
+      const [p50_sys, p90_sys, p95_sys, p50_dia, p90_dia, p95_dia] = bpRefRow;
+      const p99_sys = p95_sys + 12;
+
+      const threshEl = $('paediatric-bp-thresholds');
+      if (threshEl) threshEl.textContent = `${p90_sys}/${p90_dia} (p90) • ${p95_sys}/${p95_dia} (p95)`;
+
+      const stagePill = $('paediatric-bp-stage-pill');
+      const noteEl = $('paediatric-bp-clinical-note');
+
+      let stageName = 'Normal BP';
+      let stageBg = '#ECFDF5';
+      let stageColor = '#059669';
+      let noteText = 'Within normal limits for age and height.';
+
+      if (!isNaN(sys)) {
+        if (sys > (p99_sys + 5) || (dia && dia > (p95_dia + 12 + 5))) {
+          stageName = 'Stage 2 HTN';
+          stageBg = '#FEF2F2';
+          stageColor = '#DC2626';
+          noteText = 'Exceeds 99th percentile + 5 mmHg. Urgent medical evaluation indicated.';
+          currentPaedAlerts.push(`BP Alert [CRITICAL]: Stage 2 HTN (${sys}/${dia || '--'} mmHg exceeds p99+5 ref ${p99_sys + 5})`);
+        } else if (sys >= p95_sys || (dia && dia >= p95_dia)) {
+          stageName = 'Stage 1 HTN';
+          stageBg = '#FFF7ED';
+          stageColor = '#EA580C';
+          noteText = 'Exceeds 95th percentile. Paediatrician follow-up recommended.';
+          currentPaedAlerts.push(`BP Alert [HIGH]: Stage 1 HTN (${sys}/${dia || '--'} mmHg exceeds p95 ref ${p95_sys}/${p95_dia})`);
+        } else if (sys >= p90_sys || sys >= 120 || (dia && dia >= p90_dia)) {
+          stageName = 'Elevated BP';
+          stageBg = '#FFFBEB';
+          stageColor = '#D97706';
+          noteText = 'Above 90th percentile for age. Lifestyle counseling indicated.';
+          currentPaedAlerts.push(`BP Alert [ADVISORY]: Elevated BP (${sys}/${dia || '--'} mmHg above 90th percentile)`);
+        }
+      }
+
+      if (stagePill) {
+        stagePill.textContent = stageName;
+        stagePill.style.background = stageBg;
+        stagePill.style.color = stageColor;
+      }
+      if (noteEl) noteEl.textContent = noteText;
+
+      if (!state.lastPaediatricResult) state.lastPaediatricResult = {};
+      state.lastPaediatricResult.paediatric_bp_classification = {
+        stage: stageName,
+        reference_p90_sys: p90_sys,
+        reference_p95_sys: p95_sys
+      };
+    }
+
+    // C. Adams Forward Bend Test (ATR) Scoliosis Screening
+    const atrBadge = $('paediatric-atr-alert-badge');
+    if (!isNaN(atrVal) && atrVal >= 5.0) {
+      if (atrBadge) {
+        atrBadge.style.display = 'inline-block';
+        atrBadge.textContent = `Scoliosis Review (${atrVal}° ≥ 5°)`;
+      }
+      currentPaedAlerts.push(`Scoliosis Screen [ADVISORY]: 📐 ATR ${atrVal}° ≥ 5° — Positive Adams FBT. Orthopedic review recommended.`);
+    } else if (atrBadge) {
+      atrBadge.style.display = 'none';
+    }
+
   } else {
-    if (alertBp) {
+    // Patient is Adult (Age >= 18)
+    if (paedGrowthCard) paedGrowthCard.style.display = 'none';
+
+    // Standard Adult High BMI Alert
+    if (calculatedBmi !== null && calculatedBmi >= 25.0) {
+      hasAnyAlert = true;
+      if (alertBmi) alertBmi.style.display = 'block';
+      if (bmiBadge) bmiBadge.textContent = `${calculatedBmi} kg/m²`;
+      if (calculatedBmi >= 30.0) {
+        if (bmiTitle) bmiTitle.textContent = 'Severe Obesity Alert (BMI ≥ 30)';
+        if (bmiDesc) bmiDesc.textContent = 'Patient BMI is in the Severe Obese category. Endocrine workup and metabolic screening indicated.';
+      } else {
+        if (bmiTitle) bmiTitle.textContent = 'High BMI / Overweight Alert (BMI ≥ 25)';
+        if (bmiDesc) bmiDesc.textContent = 'Patient exceeds healthy Asian-Indian cutoffs (≥25 kg/m²). Nutritional guidance advised.';
+      }
+      if (pediatricNote) pediatricNote.style.display = 'none';
+    } else {
+      if (alertBmi) alertBmi.style.display = 'none';
+    }
+
+    // Standard Adult Hypertension Alert
+    const alertBp = $('alert-hypertension');
+    const bpTitle = $('bp-alert-title');
+    const bpBadge = $('bp-alert-badge');
+    const bpDesc = $('bp-alert-desc');
+
+    if (bpVal) {
+      const parts = bpVal.replace(/[^0-9/]/g, '').split('/');
+      const sys = parseInt(parts[0], 10);
+      const dia = parts[1] ? parseInt(parts[1], 10) : null;
+
+      if (!isNaN(sys)) {
+        if (sys >= 180 || (dia && dia >= 120)) {
+          hasAnyAlert = true;
+          if (alertBp) {
+            alertBp.style.display = 'block';
+            alertBp.classList.add('hypertensive-crisis-pulse');
+          }
+          if (bpTitle) bpTitle.textContent = '🚨 Hypertensive Crisis / Critical BP';
+          if (bpBadge) {
+            bpBadge.textContent = `${sys}/${dia || '--'} mmHg`;
+            bpBadge.style.background = '#DC2626';
+          }
+          if (bpDesc) bpDesc.textContent = 'Critically elevated BP (Systolic ≥ 180 or Diastolic ≥ 120). Urgent referral required.';
+        } else if (sys >= 140 || (dia && dia >= 90)) {
+          hasAnyAlert = true;
+          if (alertBp) {
+            alertBp.style.display = 'block';
+            alertBp.classList.remove('hypertensive-crisis-pulse');
+          }
+          if (bpTitle) bpTitle.textContent = 'Stage 2 Hypertension Alert';
+          if (bpBadge) {
+            bpBadge.textContent = `${sys}/${dia || '--'} mmHg`;
+            bpBadge.style.background = '#D97706';
+          }
+          if (bpDesc) bpDesc.textContent = 'Blood pressure ≥ 140/90 mmHg. Clinical review and specialist follow-up consultation recommended.';
+        } else if (sys >= 130 || (dia && dia >= 80)) {
+          hasAnyAlert = true;
+          if (alertBp) {
+            alertBp.style.display = 'block';
+            alertBp.classList.remove('hypertensive-crisis-pulse');
+          }
+          if (bpTitle) bpTitle.textContent = 'Stage 1 Hypertension / Elevated BP';
+          if (bpBadge) {
+            bpBadge.textContent = `${sys}/${dia || '--'} mmHg`;
+            bpBadge.style.background = '#F59E0B';
+          }
+          if (bpDesc) bpDesc.textContent = 'Blood pressure in pre-hypertensive / Stage 1 range. Routine follow-up suggested.';
+        } else {
+          if (alertBp) {
+            alertBp.style.display = 'none';
+            alertBp.classList.remove('hypertensive-crisis-pulse');
+          }
+        }
+      }
+    } else if (alertBp) {
       alertBp.style.display = 'none';
-      alertBp.classList.remove('hypertensive-crisis-pulse');
     }
   }
 
@@ -2015,7 +2881,6 @@ export function updateReviewClinicalAlerts(record) {
     { label: 'Known Allergies', id: 'rev-allergies' }
   ];
 
-  // Dynamic visual feedback: highlight blank essential inputs with pulsing amber border
   essentialFields.forEach(f => {
     const el = $(f.id);
     if (el) {
@@ -2027,7 +2892,8 @@ export function updateReviewClinicalAlerts(record) {
     }
   });
 
-  const blankEssentials = essentialFields
+  const isDynamic = window.USE_TEMPLATE_UI === 1 && state.activeRecord && state.activeRecord.template_id;
+  const blankEssentials = isDynamic ? [] : essentialFields
     .filter(f => !($(f.id)?.value.trim()))
     .map(f => f.label);
 
@@ -2091,25 +2957,16 @@ export function updateReviewClinicalAlerts(record) {
     if (alertRedFlags) alertRedFlags.style.display = 'none';
   }
 
-  // 4. Paediatric Screening Alerts (IAP LMS Centiles, BP Centile, ATR Caliper)
-  const alertPaediatric = $('alert-paediatric-screening');
-  const paedAlertsDesc = $('paediatric-alerts-desc');
-  const paedBadge = $('paediatric-alerts-badge');
-
-  const paedAlertsList = (record && (record.paediatric_alerts || (record.structured_record && record.structured_record.paediatric_alerts))) || [];
-  const isPaed = (record && record.is_paediatric) || (ageVal > 0 && ageVal < 18);
-
-  if (alertPaediatric) {
-    if (isPaed && paedAlertsList.length > 0) {
-      hasAnyAlert = true;
-      alertPaediatric.style.display = 'block';
-      if (paedBadge) paedBadge.textContent = `${paedAlertsList.length} alert${paedAlertsList.length > 1 ? 's' : ''}`;
-      if (paedAlertsDesc) {
-        paedAlertsDesc.innerHTML = paedAlertsList.map(a => `<div style="margin-bottom:2px;">• ${escapeHtml(a)}</div>`).join('');
-      }
-    } else {
-      alertPaediatric.style.display = 'none';
+  // 5. Render Paediatric Screening Alerts Banner
+  if (isPaed && currentPaedAlerts.length > 0) {
+    hasAnyAlert = true;
+    if (alertPaediatric) alertPaediatric.style.display = 'block';
+    if (paedBadge) paedBadge.textContent = `${currentPaedAlerts.length} alert${currentPaedAlerts.length > 1 ? 's' : ''}`;
+    if (paedAlertsDesc) {
+      paedAlertsDesc.innerHTML = currentPaedAlerts.map(a => `<div style="margin-bottom:2px;">• ${escapeHtml(a)}</div>`).join('');
     }
+  } else if (alertPaediatric) {
+    alertPaediatric.style.display = 'none';
   }
 
   alertsContainer.style.display = hasAnyAlert ? 'flex' : 'none';
@@ -2139,6 +2996,20 @@ export function buildFullStructuredReviewPayload() {
   const base = (state.activeRecord && state.activeRecord.structured_record) 
     ? JSON.parse(JSON.stringify(state.activeRecord.structured_record)) 
     : {};
+
+  if (window.USE_TEMPLATE_UI === 1 && state.activeRecord && state.activeRecord.template_id) {
+    const dynInputs = document.querySelectorAll('#dynamic-review-content input, #dynamic-review-content select, #dynamic-review-content textarea');
+    if (dynInputs.length > 0) {
+      base.attributes = base.attributes || {};
+      dynInputs.forEach(el => {
+        if (el.id && el.id.startsWith('dyn-field-')) {
+          const key = el.id.replace('dyn-field-', '');
+          const val = el.type === 'checkbox' ? (el.checked ? 'Yes' : 'No') : el.value.trim();
+          base.attributes[key] = val;
+        }
+      });
+    }
+  }
 
   base.personal_information = Object.assign({}, base.personal_information, {
     full_name: $('rev-name')?.value.trim() || '',
@@ -2214,6 +3085,31 @@ export function buildFullStructuredReviewPayload() {
     doctor_signature_present: $('rev-doc-sign')?.value.trim() || ''
   });
 
+  // Paediatric Growth & Screening fields
+  const ageNum = parseFloat($('rev-age')?.value || '');
+  if (!isNaN(ageNum) && ageNum < 18) {
+    base.paediatric_growth = base.paediatric_growth || {};
+    const catText = $('paediatric-nutrition-category')?.textContent?.trim();
+    const bpStage = $('paediatric-bp-stage-pill')?.textContent?.trim();
+    const atrVal = parseFloat($('rev-atr')?.value || '');
+
+    if (state.lastPaediatricResult?.paediatric_bmi_classification) {
+      base.paediatric_growth.bmi_centile = state.lastPaediatricResult.paediatric_bmi_classification.centile;
+      base.paediatric_growth.bmi_classification = state.lastPaediatricResult.paediatric_bmi_classification.category;
+    } else if (catText) {
+      base.paediatric_growth.bmi_classification = catText;
+    }
+    if (state.lastPaediatricResult?.paediatric_bp_classification) {
+      base.paediatric_growth.bp_percentile = state.lastPaediatricResult.paediatric_bp_classification.stage;
+      base.paediatric_growth.bp_classification = state.lastPaediatricResult.paediatric_bp_classification.stage;
+    } else if (bpStage) {
+      base.paediatric_growth.bp_classification = bpStage;
+    }
+    if (!isNaN(atrVal)) {
+      base.paediatric_growth.atr_degrees = atrVal;
+    }
+  }
+
   return base;
 }
 
@@ -2242,15 +3138,6 @@ export function confirmApproveDespiteMissing() {
   if (cb) cb();
 }
 
-export function printReferralSlip(recordId) {
-  const id = recordId || (state.activeRecord && state.activeRecord.id);
-  if (!id) {
-    toast('No active record selected for referral slip.', true);
-    return;
-  }
-  const slipUrl = `/api/records/${encodeURIComponent(id)}/referral-slip`;
-  window.open(slipUrl, '_blank');
-}
 
 export function toggleReviewDocs() {
   const box = $('review-docs-box');
@@ -2312,13 +3199,20 @@ export async function approveAndSaveRecord() {
   try {
     const fullStructured = buildFullStructuredReviewPayload();
 
+    const dynName = $('dyn-field-person_name')?.value?.trim();
+    const dynAge = $('dyn-field-age')?.value?.trim();
+    const dynGender = $('dyn-field-gender')?.value?.trim();
+    const dynHeight = $('dyn-field-height_cm')?.value?.trim() || $('dyn-field-height')?.value?.trim();
+    const dynWeight = $('dyn-field-weight_kg')?.value?.trim() || $('dyn-field-weight')?.value?.trim();
+    const dynBP = $('dyn-field-blood_pressure_mmhg')?.value?.trim() || $('dyn-field-blood_pressure')?.value?.trim();
+
     const updates = {
-      person_name: $('rev-name')?.value.trim() || state.activeRecord.person_name,
-      age: $('rev-age')?.value.trim() || state.activeRecord.age,
-      gender: $('rev-gender')?.value.trim() || state.activeRecord.gender,
-      height: $('rev-height')?.value.trim() || state.activeRecord.height,
-      weight: $('rev-weight')?.value.trim() || state.activeRecord.weight,
-      blood_pressure: $('rev-bp')?.value.trim() || state.activeRecord.blood_pressure,
+      person_name: dynName || $('rev-name')?.value.trim() || state.activeRecord.person_name,
+      age: dynAge || $('rev-age')?.value.trim() || state.activeRecord.age,
+      gender: dynGender || $('rev-gender')?.value.trim() || state.activeRecord.gender,
+      height: dynHeight || $('rev-height')?.value.trim() || state.activeRecord.height,
+      weight: dynWeight || $('rev-weight')?.value.trim() || state.activeRecord.weight,
+      blood_pressure: dynBP || $('rev-bp')?.value.trim() || state.activeRecord.blood_pressure,
       examination_details: $('rev-sys-rs')?.value.trim() || state.activeRecord.examination_details,
       referral_details: $('rev-referral')?.value.trim() || state.activeRecord.referral_details,
       reviewer_notes: $('rev-doctor-notes')?.value.trim() || 'Verified and approved.',
@@ -2326,10 +3220,23 @@ export async function approveAndSaveRecord() {
       consent_given: consentChecked ? 1 : 0
     };
 
+    const ageValNum = parseFloat(updates.age);
+    if (!isNaN(ageValNum) && ageValNum < 18) {
+      updates.is_paediatric = 1;
+      updates.target_group = 'paediatric';
+      if (state.lastPaediatricResult) {
+        updates.bmi_centile = state.lastPaediatricResult.paediatric_bmi_classification?.centile;
+        updates.bmi_classification = state.lastPaediatricResult.paediatric_bmi_classification?.category;
+        updates.bp_percentile = state.lastPaediatricResult.paediatric_bp_classification?.stage;
+        updates.bp_classification = state.lastPaediatricResult.paediatric_bp_classification?.stage;
+      }
+    }
+
     // 1. Review edits with full structured 7-tab updates
     await api.reviewRecord(state.activeRecord.id, updates, state.doctorName);
     // 2. Explicit approval action (checks no unresolved flags remain, bills quota, marks approved)
     await api.approveRecord(state.activeRecord.id, state.doctorName);
+    await api.unlockRecord(state.activeRecord.id, state.doctorName).catch(() => {});
 
     toast('Record approved and quota billed! 📋✅');
     go('home');
@@ -2363,6 +3270,7 @@ export async function saveDraftReview() {
     };
 
     await api.reviewRecord(state.activeRecord.id, updates, state.doctorName);
+    await api.unlockRecord(state.activeRecord.id, state.doctorName).catch(() => {});
     toast('Draft review saved (record remains in To check).');
     go('records');
   } catch (err) {
@@ -3097,11 +4005,44 @@ export async function renderSettings() {
     const status = await api.getStatus();
     const doc = state.doctorName || localStorage.getItem('clinic_doctor_name') || 'Physician';
     const email = localStorage.getItem('clinic_doctor_email') || 'physician@hospital.org';
-    const initial = doc.replace('Dr. ', '').charAt(0) || 'D';
+    const initial = doc.replace(/^Dr\.?\s*/i, '').charAt(0) || 'D';
 
     if ($('settings-doctor-name')) $('settings-doctor-name').textContent = doc;
     if ($('settings-doctor-email')) $('settings-doctor-email').textContent = email;
-    if ($('settings-doctor-av')) $('settings-doctor-av').textContent = initial;
+    if ($('settings-doctor-av')) $('settings-doctor-av').textContent = initial.toUpperCase();
+
+    // Fetch Doctor Profile & Community Data from backend API
+    try {
+      const profile = await api.getDoctorProfile();
+      if (profile) {
+        state.doctorProfile = profile;
+        const name = profile.full_name || doc;
+        const pEmail = profile.email || email;
+        const spec = profile.specialization || 'General Physician';
+        const commName = profile.community_name || 'Primary Healthcare Outreach';
+        const pInitial = name.replace(/^Dr\.?\s*/i, '').charAt(0) || 'D';
+
+        if ($('settings-doctor-name')) $('settings-doctor-name').textContent = name;
+        if ($('settings-doctor-email')) $('settings-doctor-email').textContent = pEmail;
+        if ($('settings-doctor-av')) $('settings-doctor-av').textContent = pInitial.toUpperCase();
+        if ($('settings-doctor-spec')) $('settings-doctor-spec').textContent = spec;
+        if ($('settings-community-name')) $('settings-community-name').textContent = commName;
+
+        if ($('settings-doctor-scans')) $('settings-doctor-scans').textContent = (profile.total_scans || 0).toLocaleString();
+        if ($('settings-doctor-reviews')) $('settings-doctor-reviews').textContent = (profile.total_reviews || 0).toLocaleString();
+        if ($('settings-doctor-camps')) $('settings-doctor-camps').textContent = (profile.camps_count || 0).toLocaleString();
+
+        if ($('settings-hub-title')) $('settings-hub-title').textContent = commName;
+        if ($('settings-hub-code-sub')) $('settings-hub-code-sub').textContent = `Camp Code: ${profile.community_code || 'CAMP-2026'}`;
+        if ($('team-modal-active-code')) $('team-modal-active-code').textContent = profile.community_code || 'CAMP-2026';
+        if ($('team-modal-hub-sub')) $('team-modal-hub-sub').textContent = `${commName} • Manage team & physicians`;
+
+        if ($('home-doctor-name')) $('home-doctor-name').textContent = name;
+        if ($('home-avatar')) $('home-avatar').textContent = pInitial.toUpperCase();
+      }
+    } catch (pErr) {
+      console.warn('Could not load doctor profile from API:', pErr);
+    }
 
     if (status) {
       if ($('settings-ai-provider')) {
@@ -3170,6 +4111,50 @@ export async function renderSettings() {
     } catch (iErr) {
       console.warn('Could not load invoices:', iErr);
     }
+
+    // Step 5: Fetch AI Token & Cost Breakdown Ledger
+    try {
+      const ledger = await api.getUsageLedger(1, 30);
+      const ledgerList = $('billing-ledger-list');
+      if (ledgerList) {
+        const rows = (ledger && ledger.rows) ? ledger.rows : [];
+        if (rows.length === 0) {
+          ledgerList.innerHTML = `<p style="color:var(--mute);font-size:12px;text-align:center;padding:12px 0;">No AI token transactions metered yet.</p>`;
+        } else {
+          ledgerList.innerHTML = rows.map(r => {
+            const isExtract = r.action === 'extract_call';
+            const costFormatted = (r.cost_rs !== null && r.cost_rs !== undefined) ? `₹${parseFloat(r.cost_rs).toFixed(2)}` : '₹0.00';
+            const latencyStr = r.seconds ? `${parseFloat(r.seconds).toFixed(1)}s` : '--';
+            const dateStr = r.created_at ? r.created_at.slice(0, 16).replace('T', ' ') : '';
+            const actionBadge = isExtract 
+              ? '<span class="tag" style="background:#EFF6FF;color:#1D4ED8;font-size:10px;">AI Extract</span>' 
+              : '<span class="tag" style="background:#F1F5F9;color:#475569;font-size:10px;">Quota Reserve</span>';
+
+            return `
+              <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border:1px solid #E2E8F0;border-radius:8px;background:#ffffff;font-size:12px;">
+                <div>
+                  <div style="display:flex;align-items:center;gap:6px;">
+                    <b style="color:var(--ink);font-size:12px;">${escapeHtml(r.record_id || `Tx #${r.id}`)}</b>
+                    ${actionBadge}
+                  </div>
+                  <div style="color:var(--mute);font-size:11px;margin-top:2px;">
+                    ${dateStr} ${r.model ? `• <code>${escapeHtml(r.model)}</code>` : ''} • ${latencyStr}
+                  </div>
+                </div>
+                <div style="text-align:right;">
+                  <b style="color:#059669;font-size:12.5px;">${costFormatted}</b>
+                  <div style="font-size:10.5px;color:#64748B;">
+                    ${r.tokens_in || 0} in / ${r.tokens_out || 0} out
+                  </div>
+                </div>
+              </div>
+            `;
+          }).join('');
+        }
+      }
+    } catch (lErr) {
+      console.warn('Could not load usage ledger:', lErr);
+    }
   } catch (err) {
     console.error('Error in renderSettings:', err);
   }
@@ -3221,6 +4206,190 @@ export async function clearClinicCache() {
 
 export async function resetDemoData() {
   return clearClinicCache();
+}
+
+// --------------------------------------------------------------------------
+// Doctor Profile Management & Community Team Controls
+// --------------------------------------------------------------------------
+
+export function toggleEditDoctorProfile(show) {
+  const box = $('settings-profile-edit-box');
+  if (!box) return;
+  const isVisible = box.style.display !== 'none';
+  const targetState = show !== undefined ? show : !isVisible;
+  box.style.display = targetState ? 'block' : 'none';
+
+  if (targetState) {
+    const profile = state.doctorProfile || {};
+    if ($('settings-input-name')) $('settings-input-name').value = profile.full_name || $('settings-doctor-name')?.textContent || '';
+    if ($('settings-input-spec')) $('settings-input-spec').value = profile.specialization || $('settings-doctor-spec')?.textContent || '';
+  }
+}
+
+export async function saveDoctorProfile() {
+  const nameInput = $('settings-input-name');
+  const specInput = $('settings-input-spec');
+  const full_name = nameInput ? nameInput.value.trim() : '';
+  const specialization = specInput ? specInput.value.trim() : '';
+
+  if (!full_name) {
+    toast('Please enter a doctor name', true);
+    return;
+  }
+
+  try {
+    await api.updateDoctorProfile({
+      full_name,
+      specialization
+    });
+    toast('Physician profile updated successfully! 🩺');
+    toggleEditDoctorProfile(false);
+    await renderSettings();
+  } catch (err) {
+    toast('Failed to update profile: ' + (err.message || 'Error'), true);
+  }
+}
+
+export async function openTeamManagementModal() {
+  const modal = $('team-management-modal');
+  if (modal) modal.style.display = 'flex';
+
+  const code = state.doctorProfile?.community_code || 'CAMP-2026';
+  if ($('team-modal-active-code')) $('team-modal-active-code').textContent = code;
+  if ($('team-invite-created-box')) $('team-invite-created-box').style.display = 'none';
+
+  await loadTeamMembers();
+}
+
+export function closeTeamManagementModal() {
+  const modal = $('team-management-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+export async function loadTeamMembers() {
+  const listEl = $('team-members-list');
+  const countEl = $('team-members-count');
+  if (!listEl) return;
+
+  listEl.innerHTML = `<div style="text-align:center;padding:12px;color:#64748B;font-size:12.5px;">Loading team roster...</div>`;
+
+  try {
+    const commId = state.doctorProfile?.community_id;
+    const res = await api.getCommunityMembers(commId);
+    const members = (res && res.members) ? res.members : [];
+    if (countEl) countEl.textContent = members.length;
+
+    if (members.length === 0) {
+      listEl.innerHTML = `<p style="text-align:center;padding:12px;color:#64748B;font-size:12px;">No other doctors or staff found in this workspace.</p>`;
+      return;
+    }
+
+    listEl.innerHTML = members.map(m => {
+      const isCurrent = state.doctorProfile && (m.id === state.doctorProfile.id || m.email === state.doctorProfile.email);
+      const roleLabel = m.community_role === 'admin' ? 'Administrator' : (m.community_role === 'field_worker' ? 'Field Worker' : 'Physician');
+      const roleBg = m.community_role === 'admin' ? '#FEE2E2;color:#991B1B' : (m.community_role === 'field_worker' ? '#FEF3C7;color:#92400E' : '#E0E7FF;color:#3730A3');
+      const initial = (m.full_name || 'U').replace(/^Dr\.?\s*/i, '').charAt(0) || 'U';
+
+      return `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border:1px solid #E2E8F0;border-radius:12px;background:#ffffff;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div style="width:36px;height:36px;border-radius:50%;background:#F1F5F9;display:flex;align-items:center;justify-content:center;font-weight:700;color:#0F172A;font-size:14px;">
+              ${escapeHtml(initial.toUpperCase())}
+            </div>
+            <div>
+              <div style="display:flex;align-items:center;gap:6px;">
+                <b style="font-size:13.5px;color:#0F172A;">${escapeHtml(m.full_name || m.email)}</b>
+                ${isCurrent ? '<span style="font-size:10px;background:#E2E8F0;padding:1px 5px;border-radius:4px;color:#475569;">You</span>' : ''}
+              </div>
+              <div style="font-size:11.5px;color:#64748B;">
+                ${escapeHtml(m.email || '')} ${m.specialization ? `• ${escapeHtml(m.specialization)}` : ''}
+              </div>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span class="tag" style="background:${roleBg};font-size:10.5px;font-weight:700;border:none;">
+              ${roleLabel}
+            </span>
+            ${!isCurrent ? `
+              <button class="btn ghost" style="width:auto;padding:3px 8px;font-size:11px;color:#DC2626;border:1px solid #FCA5A5;border-radius:6px;" onclick="window.app.revokeTeamMember('${escapeHtml(m.id)}')">
+                Revoke
+              </button>
+            ` : ''}
+          </div>
+        </div>
+      `;
+    }).join('');
+  } catch (err) {
+    listEl.innerHTML = `<p style="text-align:center;padding:10px;color:#DC2626;font-size:12px;">Failed to load members: ${escapeHtml(err.message || 'Error')}</p>`;
+  }
+}
+
+export async function sendTeamInvite() {
+  const emailInput = $('team-invite-email');
+  const roleSelect = $('team-invite-role');
+  const email = emailInput ? emailInput.value.trim() : '';
+  const role = roleSelect ? roleSelect.value : 'doctor';
+  const box = $('team-invite-created-box');
+
+  if (!email) {
+    toast('Please enter the physician or staff member email', true);
+    return;
+  }
+
+  try {
+    const res = await api.inviteDoctorToCommunity(email, role);
+    if (box) {
+      box.style.display = 'block';
+      box.innerHTML = `
+        <b>✅ Invite Generated!</b>
+        <div style="margin-top:4px;">Share this code with <code>${escapeHtml(email)}</code>:</div>
+        <div style="font-size:16px;font-weight:800;letter-spacing:1px;font-family:monospace;margin:6px 0;color:#1D4ED8;">
+          ${escapeHtml(res.invite_code || res.community_code || 'CODE-EXPIRES-72H')}
+        </div>
+        <small style="color:#64748B;">Valid for 72 hours for self-registration.</small>
+      `;
+    }
+    toast(`Invite code created for ${email}!`);
+    if (emailInput) emailInput.value = '';
+  } catch (err) {
+    toast('Failed to generate invite: ' + (err.message || 'Error'), true);
+  }
+}
+
+export async function rotateTeamWorkspaceCode() {
+  if (!confirm('Are you sure you want to rotate the workspace join code? Prior camp codes will no longer admit new attendees.')) {
+    return;
+  }
+
+  try {
+    const commId = state.doctorProfile?.community_id;
+    const res = await api.rotateCommunityCode(commId);
+    const newCode = res.community_code || res.new_code;
+    if (newCode) {
+      if ($('team-modal-active-code')) $('team-modal-active-code').textContent = newCode;
+      if ($('settings-hub-code-sub')) $('settings-hub-code-sub').textContent = `Camp Code: ${newCode}`;
+      if (state.doctorProfile) state.doctorProfile.community_code = newCode;
+    }
+    toast('Workspace Join Code rotated successfully! 🔄');
+  } catch (err) {
+    toast('Failed to rotate code: ' + (err.message || 'Error'), true);
+  }
+}
+
+export async function revokeTeamMember(doctorId) {
+  if (!doctorId) return;
+  if (!confirm('Revoke access for this physician/staff member? They will be removed from this workspace.')) {
+    return;
+  }
+
+  try {
+    const commId = state.doctorProfile?.community_id;
+    await api.revokeCommunityMember(commId, doctorId);
+    toast('Physician access revoked.');
+    await loadTeamMembers();
+  } catch (err) {
+    toast('Failed to revoke access: ' + (err.message || 'Error'), true);
+  }
 }
 
 // ==========================================================================
@@ -3306,16 +4475,44 @@ export function clearSignature() {
 
 export async function renderAnalytics() {
   try {
-    const data = await api.getCampAnalytics(state.selectedCampId);
-    if (!data) return;
-
-    if ($('analytics-patient-count')) {
-      $('analytics-patient-count').textContent = `${data.total_patients || state.records.length || 0} Patients`;
+    // Populate Camp Filter Select dropdown
+    const select = $('analytics-camp-select');
+    if (select && select.options.length <= 1) {
+      const camps = await api.getCamps().catch(() => []);
+      camps.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c.id;
+        opt.textContent = c.name ? `${c.name} (${c.location || 'Outreach'})` : `Camp ${c.id.slice(-6)}`;
+        select.appendChild(opt);
+      });
+      if (state.selectedCampId) {
+        select.value = state.selectedCampId;
+      }
     }
 
-    const bpNorm = Math.round(data.bp_normal_pct ?? 62);
-    const bpPre = Math.round(data.bp_prehypertension_pct ?? 24);
-    const bpHtn = Math.round(data.bp_hypertension_pct ?? 14);
+    const selectedCampId = select ? select.value : state.selectedCampId;
+    const data = await api.getCampAnalytics(selectedCampId || null);
+    if (!data) return;
+
+    const total = data.total_patients || 0;
+    if ($('analytics-patient-count')) {
+      $('analytics-patient-count').textContent = `${total} Patient${total === 1 ? '' : 's'}`;
+    }
+
+    // Dynamic Blood Pressure Triage Percentages
+    let bpNorm = 0, bpPre = 0, bpHtn = 0;
+    if (total > 0 && data.bp_classification) {
+      const normCount = data.bp_classification['Normal (<120/80)'] || 0;
+      const preCount = data.bp_classification['Elevated (120-129/<80)'] || 0;
+      const htnCount = (data.bp_classification['Stage 1 (130-139/80-89)'] || 0) + (data.bp_classification['Stage 2 (>=140/>=90)'] || 0);
+      bpNorm = Math.round((normCount / total) * 100);
+      bpPre = Math.round((preCount / total) * 100);
+      bpHtn = Math.round((htnCount / total) * 100);
+    } else {
+      bpNorm = Math.round(data.bp_normal_pct ?? 62);
+      bpPre = Math.round(data.bp_prehypertension_pct ?? 24);
+      bpHtn = Math.round(data.bp_hypertension_pct ?? 14);
+    }
 
     if ($('analytics-bp-normal-pct')) $('analytics-bp-normal-pct').textContent = `${bpNorm}%`;
     if ($('analytics-bp-normal-bar')) $('analytics-bp-normal-bar').style.width = `${bpNorm}%`;
@@ -3326,6 +4523,7 @@ export async function renderAnalytics() {
     if ($('analytics-bp-htn-pct')) $('analytics-bp-htn-pct').textContent = `${bpHtn}%`;
     if ($('analytics-bp-htn-bar')) $('analytics-bp-htn-bar').style.width = `${bpHtn}%`;
 
+    // BMI Staging
     const bmiUnder = Math.round(data.bmi_underweight_pct ?? 14);
     const bmiNorm = Math.round(data.bmi_normal_pct ?? 58);
     const bmiOver = Math.round(data.bmi_overweight_pct ?? 28);
@@ -3339,11 +4537,29 @@ export async function renderAnalytics() {
     if ($('analytics-bmi-over-pct')) $('analytics-bmi-over-pct').textContent = `${bmiOver}%`;
     if ($('analytics-bmi-over-bar')) $('analytics-bmi-over-bar').style.width = `${bmiOver}%`;
 
-    if ($('analytics-dental-pct')) $('analytics-dental-pct').textContent = `${Math.round(data.dental_caries_pct ?? 34)}%`;
-    if ($('analytics-vision-pct')) $('analytics-vision-pct').textContent = `${Math.round(data.vision_deficit_pct ?? 18)}%`;
+    // Dental & Vision screening prevalence
+    if (total > 0 && data.dental_screening) {
+      const cariesCount = data.dental_screening.caries_identified || 0;
+      const dentalPct = Math.round((cariesCount / total) * 100);
+      if ($('analytics-dental-pct')) $('analytics-dental-pct').textContent = `${dentalPct}%`;
+    } else {
+      if ($('analytics-dental-pct')) $('analytics-dental-pct').textContent = `${Math.round(data.dental_caries_pct ?? 34)}%`;
+    }
+
+    if (total > 0 && data.vision_screening) {
+      const deficitCount = (data.vision_screening.refraction_deficit || 0) + (data.vision_screening.cataract_suspect || 0);
+      const visionPct = Math.round((deficitCount / total) * 100);
+      if ($('analytics-vision-pct')) $('analytics-vision-pct').textContent = `${visionPct}%`;
+    } else {
+      if ($('analytics-vision-pct')) $('analytics-vision-pct').textContent = `${Math.round(data.vision_deficit_pct ?? 18)}%`;
+    }
   } catch (err) {
-    console.warn('[Analytics] Using fallback camp statistics:', err);
+    console.warn('[Analytics] Error rendering camp statistics:', err);
   }
+}
+
+export async function onAnalyticsCampChanged() {
+  await renderAnalytics();
 }
 
 export async function eraseActiveRecord() {
@@ -3426,6 +4642,13 @@ function showOfflineQueueStatus() {
 
 // Global App Export
 window.app = {
+  state,  // Export state so api.js can check currentScreen
+  classifyFooterLocally,
+  showUnsupportedModal,
+  dismissUnsupportedModal,
+  renderDynamicTemplateReview,
+  switchDynamicReviewTab,
+  renderStaticReview,
   go,
   goBack,
   login,
@@ -3477,7 +4700,6 @@ window.app = {
   showMissingConfirmationModal,
   closeMissingConfirmModal,
   confirmApproveDespiteMissing,
-  printReferralSlip,
   toggleTorch,
   showQualityAlertModal,
   retryCaptureFromAlert,
@@ -3503,10 +4725,20 @@ window.app = {
   filterExcelPreview,
   onExportFilterChanged,
   renderAnalytics,
+  onAnalyticsCampChanged,
+  checkDuplicatePatient,
   openNewCampModal,
   closeNewCampModal,
   saveNewCamp,
   renderSettings,
+  toggleEditDoctorProfile,
+  saveDoctorProfile,
+  openTeamManagementModal,
+  closeTeamManagementModal,
+  loadTeamMembers,
+  sendTeamInvite,
+  rotateTeamWorkspaceCode,
+  revokeTeamMember,
   openBuyAddonModal,
   closeBuyAddonModal,
   buyAddonPack,
@@ -3520,7 +4752,15 @@ window.app = {
   takePhotoWithCamera,
   uploadFromGallery,
   checkSecureContext,
-  finishSplash: () => window.finishSplash && window.finishSplash(),
+  finishSplash: () => {
+    const landing = document.getElementById('landing');
+    if (landing) {
+      document.querySelectorAll('.scr').forEach(s => {
+        s.classList.toggle('on', s.id === 'landing');
+      });
+    }
+    go('landing');
+  },
   showOfflineQueueStatus,
 };
 
@@ -3538,9 +4778,17 @@ function initApp() {
   });
 
   updateDoctorDisplays();
-  renderHome();
+  // Don't call renderHome() on init - stay on landing page
+  // renderHome() will be called after successful login
   initPinBoxes();
   resetSessionIdleTimer();
+  
+  // Force navigation to landing page
+  setTimeout(() => {
+    if (state.currentScreen !== 'landing') {
+      go('landing');
+    }
+  }, 100);
 
   // ── Phase 4: Encrypted Offline Queue + ServiceWorker ────────────────────
   (async () => {
@@ -3611,114 +4859,42 @@ function initApp() {
   // ── End Phase 4 ──────────────────────────────────────────────────────────
 
 
-  const splashBar = document.getElementById('splash-progress-bar');
-  const splashText = document.getElementById('splash-status-text');
-  const splashPct = document.getElementById('splash-pct');
-  const splashPillText = document.getElementById('splash-status-pill-text');
-  const splashEl = document.getElementById('splash');
-
-  let transitioned = false;
-  let failsafeTimeout = null;
-  let animFrameId = null;
-
   const finishSplash = () => {
-    if (transitioned) return;
-    transitioned = true;
-    if (animFrameId) {
-      cancelAnimationFrame(animFrameId);
-      animFrameId = null;
-    }
-    if (failsafeTimeout) {
-      clearTimeout(failsafeTimeout);
-      failsafeTimeout = null;
-    }
-    if (window.splashSafetyTimer) {
-      clearTimeout(window.splashSafetyTimer);
-      window.splashSafetyTimer = null;
-    }
-    if (splashBar) splashBar.style.width = '100%';
-    if (splashPct) splashPct.textContent = '100%';
-    if (splashText) splashText.textContent = 'Ready · Optical Intake Platform';
-    if (splashPillText) splashPillText.textContent = 'CLINICAL VISION AI · READY';
-
-    const sp = document.getElementById('splash');
-    if (sp) {
-      sp.style.transition = 'opacity 0.45s cubic-bezier(0.16, 1, 0.3, 1), transform 0.45s cubic-bezier(0.16, 1, 0.3, 1), filter 0.45s ease';
-      sp.style.opacity = '0';
-      sp.style.transform = 'scale(1.03)';
-      sp.style.filter = 'blur(8px)';
-      sp.style.pointerEvents = 'none';
-      setTimeout(() => {
-        sp.classList.add('hidden');
-        sp.style.display = 'none';
-        if (state.currentScreen === 'splash') {
-          go('landing');
-        }
-      }, 450);
-    } else {
-      if (state.currentScreen === 'splash') {
-        go('landing');
-      }
-    }
+    console.log('[I2I] Finishing splash, navigating to landing');
+    go('landing');
   };
-
-  // Expose globally for skip button
   window.finishSplash = finishSplash;
+  window.__docScannerFinishSplash = finishSplash;
+  
+  // Ensure we're on landing page after init
+  console.log('[I2I] InitApp complete, current screen:', state.currentScreen);
+  go('landing');
+}
 
-  // Fluid CSS / JS Optical Scanner Animation Timeline
-  const stages = [
-    { at: 0, text: "Initializing Optical Vision AI Core...", pill: "CLINICAL VISION AI · INITIALIZING" },
-    { at: 22, text: "Calibrating Dual-Page Intake Grids...", pill: "DUAL-PAGE ALIGNMENT · CALIBRATING" },
-    { at: 48, text: "Connecting Medical Camp Store & SQLite...", pill: "ENCRYPTED STORAGE · CONNECTED" },
-    { at: 74, text: "Syncing Clinical Vitals Knowledge Engine...", pill: "VITALS KNOWLEDGE ENGINE · SYNCED" },
-    { at: 92, text: "Ready · Launching Optical Intake Platform", pill: "CLINICAL VISION AI · READY" }
-  ];
-
-  const isFrozenDemo = window.location.search.includes('freeze');
-  const splashDurationMs = isFrozenDemo ? 30000 : 2600;
-  const splashStartTime = performance.now();
-
-  function stepSplash(currentTime) {
-    if (transitioned) return;
-    const elapsed = currentTime - splashStartTime;
-    const progress = Math.min(1, elapsed / splashDurationMs);
-    const pct = Math.min(100, Math.round(progress * 100));
-
-    if (splashBar) splashBar.style.width = `${pct}%`;
-    if (splashPct) splashPct.textContent = `${pct}%`;
-
-    const currentStage = [...stages].reverse().find(s => pct >= s.at);
-    if (currentStage) {
-      if (splashText) splashText.textContent = currentStage.text;
-      if (splashPillText) splashPillText.textContent = currentStage.pill;
-    }
-
-    if (progress < 1) {
-      animFrameId = requestAnimationFrame(stepSplash);
-    } else {
-      setTimeout(finishSplash, 200);
-    }
+// Boot sequence: play intro before application init
+const playIntro = (cb) => {
+  if (typeof Intro !== 'undefined' && Intro.play) {
+    Intro.play({ base: 'intro/', once: 'session' }).then(cb).catch(cb);
+  } else {
+    cb();
   }
+};
 
-  animFrameId = requestAnimationFrame(stepSplash);
+function startApp() {
+  initApp();
+}
 
-  // Allow clicking splash to instantly enter (unless in freeze mode)
-  if (splashEl && !isFrozenDemo) {
-    splashEl.addEventListener('click', () => {
-      finishSplash();
-    }, { once: true });
-  }
-
-  // Backup failsafe timer
-  failsafeTimeout = setTimeout(finishSplash, isFrozenDemo ? 35000 : 3500);
+function bootApplication() {
+  playIntro(startApp);
 }
 
 // Run boot sequence reliably
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initApp);
+  document.addEventListener('DOMContentLoaded', bootApplication);
 } else {
-  initApp();
+  bootApplication();
 }
+
 
 // --- Unified AI Pipeline Settings Modal Controller ---
 window.openAISettingsModal = async function() {

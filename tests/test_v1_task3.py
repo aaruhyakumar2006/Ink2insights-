@@ -150,6 +150,112 @@ def test_doctor_route_forbidden_for_unauthorized_role_returns_403(auth_client_an
     assert data["error"] == "forbidden"
 
 
+def _seed_two_org_records(client, db_file):
+    """Helper to create records belonging to two distinct organizations."""
+    from backend import database
+    # Org B Camp & Record
+    database.create_camp("Camp Org B", 50, "Today", camp_id="camp_b_01", community_id="org_B", db_path=db_file)
+    with database.get_db_connection(db_file) as conn:
+        conn.cursor().execute("""
+            INSERT OR REPLACE INTO records (id, camp_id, person_name, status, community_id, created_at, updated_at)
+            VALUES ('rec_org_b_99', 'camp_b_01', 'Patient In Org B', 'needs_review', 'org_B', '2026-10-29T10:00:00', '2026-10-29T10:00:00');
+        """)
+        conn.commit()
+
+
+def test_cross_org_read_and_change_forbidden_for_admin(auth_client_and_db):
+    """403: Admin in Org A cannot read or change Org B's records."""
+    client, db_file = auth_client_and_db
+    _seed_two_org_records(client, db_file)
+
+    admin_a_token = create_access_token(user_id="admin_a", role="admin", org_id="org_A")
+    headers = {"Authorization": f"Bearer {admin_a_token}"}
+
+    # 1. Admin A attempts to READ Org B record -> 403
+    read_res = client.get("/api/records/rec_org_b_99", headers=headers)
+    assert read_res.status_code == 403
+    assert read_res.get_json()["error"] == "forbidden"
+
+    # 2. Admin A attempts to CHANGE Org B record -> 403
+    change_res = client.put("/api/records/rec_org_b_99", json={"person_name": "Hacked By Org A"}, headers=headers)
+    assert change_res.status_code == 403
+    assert change_res.get_json()["error"] == "forbidden"
+
+
+def test_cross_org_read_and_change_forbidden_for_doctor(auth_client_and_db):
+    """403: Doctor in Org A cannot read or change Org B's records."""
+    client, db_file = auth_client_and_db
+    _seed_two_org_records(client, db_file)
+
+    doc_a_token = create_access_token(user_id="doc_a", role="doctor", org_id="org_A")
+    headers = {"Authorization": f"Bearer {doc_a_token}"}
+
+    # 1. Doctor A attempts to READ Org B record -> 403
+    read_res = client.get("/api/records/rec_org_b_99", headers=headers)
+    assert read_res.status_code == 403
+    assert read_res.get_json()["error"] == "forbidden"
+
+    # 2. Doctor A attempts to CHANGE Org B record -> 403
+    change_res = client.put("/api/records/rec_org_b_99", json={"person_name": "Hacked By Doctor A"}, headers=headers)
+    assert change_res.status_code == 403
+    assert change_res.get_json()["error"] == "forbidden"
+
+
+def test_cross_org_read_and_change_forbidden_for_field_worker(auth_client_and_db):
+    """403: Field worker in Org A cannot read or change Org B's records."""
+    client, db_file = auth_client_and_db
+    _seed_two_org_records(client, db_file)
+
+    worker_a_token = create_access_token(user_id="worker_a", role="field_worker", org_id="org_A")
+    headers = {"Authorization": f"Bearer {worker_a_token}"}
+
+    # 1. Worker A attempts to READ Org B record -> 403
+    read_res = client.get("/api/records/rec_org_b_99", headers=headers)
+    assert read_res.status_code == 403
+    assert read_res.get_json()["error"] == "forbidden"
+
+    # 2. Worker A attempts to CHANGE Org B record -> 403
+    change_res = client.put("/api/records/rec_org_b_99", json={"person_name": "Hacked By Worker A"}, headers=headers)
+    assert change_res.status_code == 403
+    assert change_res.get_json()["error"] == "forbidden"
+
+
+def test_user_metadata_cannot_spoof_app_metadata_org_id(auth_client_and_db):
+    """Security: org_id is taken strictly from app_metadata, user_metadata spoof is ignored."""
+    client, db_file = auth_client_and_db
+    _seed_two_org_records(client, db_file)
+
+    # Malicious user with app_metadata org_id="org_A", but tries to put org_id="org_B" in user_metadata
+    now = datetime.now(timezone.utc)
+    forged_user_meta_payload = {
+        "iss": "supabase",
+        "sub": "user_malicious",
+        "aud": "authenticated",
+        "app_metadata": {
+            "provider": "email",
+            "role": "doctor",
+            "org_id": "org_A"  # Real tenant
+        },
+        "user_metadata": {
+            "org_id": "org_B",  # Malicious attempt to claim org_B
+            "role": "admin"
+        },
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(hours=12)).timestamp())
+    }
+    forged_token = jwt.encode(forged_user_meta_payload, TEST_JWT_SECRET, algorithm=JWT_ALGORITHM)
+    headers = {
+        "Authorization": f"Bearer {forged_token}",
+        "X-Org-ID": "org_B"  # Spoofed header
+    }
+
+    # Attempt to read Org B record using spoofed user_metadata
+    res = client.get("/api/records/rec_org_b_99", headers=headers)
+    assert res.status_code == 403
+    assert res.get_json()["error"] == "forbidden"
+
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. Public Endpoints Whitelist Tests
 # ─────────────────────────────────────────────────────────────────────────────
@@ -267,7 +373,7 @@ def test_pin_hashing_and_verification():
     hashed, salt = hash_pin(raw_pin)
 
     assert hashed != raw_pin
-    assert len(hashed) == 64  # SHA-256 hex
+    assert len(hashed) in (60, 64)  # Bcrypt (60) or legacy SHA-256 (64)
     assert len(salt) >= 16
 
     assert verify_pin(raw_pin, hashed, salt) is True

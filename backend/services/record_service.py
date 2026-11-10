@@ -164,7 +164,11 @@ class RecordService:
             "quality_bypassed": 1 if data.get("quality_bypassed") else 0,
             "target_group": data.get("target_group") or (camp.get("target_group") if camp else "adult"),
             "is_paediatric": 1 if (data.get("is_paediatric") or (camp and camp.get("target_group") == "paediatric")) else 0,
-            "paediatric_alerts": data.get("paediatric_alerts", []),
+            "scanned_by": data.get("scanned_by"),
+            "community_id": data.get("community_id") or (camp.get("community_id") if camp else None),
+            "template_id": data.get("template_id"),
+            "template_version": data.get("template_version"),
+            "form_family": data.get("form_family"),
             "reviewer_notes": None,
             "reviewed_by": None,
             "reviewed_at": None
@@ -197,10 +201,23 @@ class RecordService:
             raise RuntimeError(f"Failed to update record '{record_id}'.")
         return updated
 
-    def generate_csv_export(self, camp_id: Optional[str] = None, only_reviewed: bool = False) -> str:
+    def generate_csv_export(
+        self,
+        camp_id: Optional[str] = None,
+        only_reviewed: bool = False,
+        community_id: Optional[str] = None,
+        org_id: Optional[str] = None
+    ) -> str:
         """Generate RFC 4180 compliant CSV of records with formula injection protection."""
         status_filter = "reviewed" if only_reviewed else None
-        records = database.list_records(camp_id=camp_id, status=status_filter, limit=10000, db_path=self.db_path)
+        target_org = org_id or community_id
+        records = database.list_records(
+            camp_id=camp_id,
+            status=status_filter,
+            community_id=target_org,
+            limit=10000,
+            db_path=self.db_path
+        )
 
         output = io.StringIO()
         writer = csv.writer(output, quoting=csv.QUOTE_MINIMAL, lineterminator="\r\n")
@@ -312,11 +329,12 @@ class RecordService:
         return output.getvalue()
 
     @staticmethod
-    def _write_attributes_sheet(wb, form_id: str, tab_color: str, header_bg: str) -> None:
-        """Write declarative Form Structure & Attributes Dictionary as Sheet 2 for clinical auditability."""
+    def _write_attributes_sheet(wb, form_id: str, tab_color: str, header_bg: str, sheet_title: Optional[str] = None) -> None:
+        """Write declarative Form Structure & Attributes Dictionary as Sheet for clinical auditability."""
         from backend.services.template_engine import default_template_engine
 
-        ws_attrs = wb.add_worksheet("Form Attributes")
+        title = sheet_title or "Form Attributes"
+        ws_attrs = wb.add_worksheet(title)
         ws_attrs.set_tab_color(tab_color)
         ws_attrs.freeze_panes(1, 2)
 
@@ -384,12 +402,21 @@ class RecordService:
         self,
         camp_id: Optional[str] = None,
         only_reviewed: bool = False,
-        form_type: Optional[str] = None
+        form_type: Optional[str] = None,
+        community_id: Optional[str] = None,
+        org_id: Optional[str] = None
     ) -> bytes:
         """Generate formatted Excel (.xlsx) workbook with columns in exact form field order (Page 1 → Page 2)."""
         status_filter = "reviewed" if only_reviewed else None
-        records = database.list_records(camp_id=camp_id, status=status_filter, limit=10000, db_path=self.db_path)
-        camps = database.list_camps_with_stats(self.db_path)
+        target_org = org_id or community_id
+        records = database.list_records(
+            camp_id=camp_id,
+            status=status_filter,
+            community_id=target_org,
+            limit=10000,
+            db_path=self.db_path
+        )
+        camps = database.list_camps_with_stats(self.db_path, community_id=target_org)
         selected_camp = None
         if camp_id:
             matching = [c for c in camps if c["id"] == camp_id]
@@ -400,39 +427,59 @@ class RecordService:
         # Route to segregated paediatric export if explicitly requested or camp target_group is paediatric
         norm_type = (form_type or "").strip().lower()
         if norm_type in ("paediatric", "pediatric", "school"):
-            is_paediatric = True
-        elif norm_type in ("adult", "university", "general"):
-            is_paediatric = False
-        else:
-            is_paediatric = bool(selected_camp and selected_camp.get("target_group") == "paediatric")
-            if not is_paediatric and records and any(r.get("target_group") == "paediatric" or r.get("is_paediatric") for r in records):
-                is_paediatric = True
-
-        if is_paediatric:
             return self._generate_paediatric_excel_export(camp_id=camp_id, camp=selected_camp, records=records, only_reviewed=only_reviewed)
+        elif norm_type in ("adult", "university", "general"):
+            return self._generate_adult_excel_export(camp_id=camp_id, camp=selected_camp, records=records, camps=camps, only_reviewed=only_reviewed)
+        else:
+            has_adult = any(r.get("target_group") != "paediatric" and not r.get("is_paediatric") for r in records) if records else True
+            has_paediatric = any(r.get("target_group") == "paediatric" or r.get("is_paediatric") for r in records) if records else False
+            if has_adult and has_paediatric:
+                return self._generate_multi_family_excel_export(camp_id=camp_id, camp=selected_camp, records=records, camps=camps, only_reviewed=only_reviewed)
 
-        return self._generate_adult_excel_export(camp_id=camp_id, camp=selected_camp, records=records, camps=camps, only_reviewed=only_reviewed)
+            if has_paediatric or (selected_camp and selected_camp.get("target_group") == "paediatric"):
+                return self._generate_paediatric_excel_export(camp_id=camp_id, camp=selected_camp, records=records, only_reviewed=only_reviewed)
 
-    def generate_adult_excel_export(self, camp_id: Optional[str] = None, only_reviewed: bool = False) -> bytes:
-        """Explicitly generate Adult Health Screening (.xlsx) workbook."""
-        return self.generate_excel_export(camp_id=camp_id, only_reviewed=only_reviewed, form_type="adult")
+            return self._generate_adult_excel_export(camp_id=camp_id, camp=selected_camp, records=records, camps=camps, only_reviewed=only_reviewed)
 
-    def generate_paediatric_excel_export(self, camp_id: Optional[str] = None, only_reviewed: bool = False) -> bytes:
-        """Explicitly generate Paediatric School Health Screening (.xlsx) workbook."""
-        return self.generate_excel_export(camp_id=camp_id, only_reviewed=only_reviewed, form_type="paediatric")
-
-    def _generate_adult_excel_export(
+    def generate_adult_excel_export(
         self,
-        camp_id: Optional[str],
-        camp: Optional[Dict[str, Any]],
-        records: List[Dict[str, Any]],
-        camps: List[Dict[str, Any]],
-        only_reviewed: bool = False
+        camp_id: Optional[str] = None,
+        only_reviewed: bool = False,
+        community_id: Optional[str] = None,
+        org_id: Optional[str] = None
     ) -> bytes:
-        """Generate formatted Adult Health (.xlsx) workbook with Form Attributes sheet and Camp Summary."""
-        output = io.BytesIO()
-        wb = xlsxwriter.Workbook(output, {'in_memory': True, 'remove_timezone': True})
+        """Explicitly generate Adult Health Screening (.xlsx) workbook."""
+        return self.generate_excel_export(
+            camp_id=camp_id,
+            only_reviewed=only_reviewed,
+            form_type="adult",
+            community_id=community_id,
+            org_id=org_id
+        )
 
+    def generate_paediatric_excel_export(
+        self,
+        camp_id: Optional[str] = None,
+        only_reviewed: bool = False,
+        community_id: Optional[str] = None,
+        org_id: Optional[str] = None
+    ) -> bytes:
+        """Explicitly generate Paediatric School Health Screening (.xlsx) workbook."""
+        return self.generate_excel_export(
+            camp_id=camp_id,
+            only_reviewed=only_reviewed,
+            form_type="paediatric",
+            community_id=community_id,
+            org_id=org_id
+        )
+
+    def _populate_adult_records_worksheet(
+        self,
+        wb,
+        ws,
+        records: List[Dict[str, Any]]
+    ) -> None:
+        """Write columns and rows for adult health records into given worksheet."""
         # ── Formats ──────────────────────────────────────────────────────────
         header_fmt = wb.add_format({
             'bold': True, 'font_name': 'Calibri', 'font_size': 10,
@@ -467,12 +514,6 @@ class RecordService:
             'border': 1, 'border_color': '#FDE68A'
         })
 
-        sheet_name = "Patient Records"
-        if camp_id and camps:
-            c_name = re.sub(r'[:/\\?*\[\]]', '', str(camps[0].get("name", "Records")))[:30].strip()
-            sheet_name = c_name or "Patient Records"
-
-        ws = wb.add_worksheet(sheet_name)
         ws.set_tab_color('#D81B60')
         ws.set_row(0, 40)
         ws.freeze_panes(1, 3)
@@ -813,11 +854,31 @@ class RecordService:
                 fmt_to_use = st_fmt if c_idx == 2 else row_fmt
                 ws.write_string(row_idx, c_idx, sanitize_csv_cell(val), fmt_to_use)
 
-        # ── Sheet 2: Form Structure & Attributes Dictionary ──────────────────
-        self._write_attributes_sheet(wb, "adult", tab_color='#AD1457', header_bg='#880E4F')
 
+
+    def _populate_camp_summary_worksheet(
+        self,
+        wb,
+        ws_camps,
+        camps: List[Dict[str, Any]]
+    ) -> None:
+        """Write camp summary metrics into given worksheet."""
+        header_fmt = wb.add_format({
+            'bold': True, 'font_name': 'Calibri', 'font_size': 10,
+            'bg_color': '#D81B60', 'font_color': '#FFFFFF',
+            'valign': 'vcenter', 'align': 'center',
+            'border': 1, 'border_color': '#F8BBD0', 'text_wrap': True
+        })
+        cell_fmt = wb.add_format({
+            'font_name': 'Calibri', 'font_size': 9,
+            'valign': 'vcenter', 'border': 1, 'border_color': '#F1F4F7'
+        })
+        cell_alt_fmt = wb.add_format({
+            'font_name': 'Calibri', 'font_size': 9, 'valign': 'vcenter',
+            'bg_color': '#FDF9FB', 'border': 1, 'border_color': '#F1F4F7'
+        })
         # ── Sheet 3: Camp Summary ─────────────────────────────────────────────
-        ws_camps = wb.add_worksheet("Camp Summary")
+        # ws_camps passed in as parameter
         ws_camps.set_tab_color('#C2185B')
         camp_cols = [
             ("Camp ID", 20), ("Camp Name", 30), ("Camp Date", 14),
@@ -862,21 +923,43 @@ class RecordService:
             ws_camps.write_number(row_idx, 12, total_referrals, r_fmt)
             ws_camps.write_string(row_idx, 13, str(c.get("created_at") or ""), r_fmt)
 
-        wb.close()
-        output.seek(0)
-        return output.getvalue()
 
-    def _generate_paediatric_excel_export(
+
+    def _generate_adult_excel_export(
         self,
         camp_id: Optional[str],
         camp: Optional[Dict[str, Any]],
         records: List[Dict[str, Any]],
+        camps: List[Dict[str, Any]],
         only_reviewed: bool = False
     ) -> bytes:
-        """Generate specialized Paediatric Health Screening (.xlsx) workbook for school camps."""
+        """Generate formatted Adult Health (.xlsx) workbook with Form Attributes sheet and Camp Summary."""
         output = io.BytesIO()
         wb = xlsxwriter.Workbook(output, {'in_memory': True, 'remove_timezone': True})
 
+        sheet_name = "Patient Records"
+        if camp_id and camps:
+            c_name = re.sub(r'[:/\\?*\[\]]', '', str(camps[0].get("name", "Records")))[:30].strip()
+            sheet_name = c_name or "Patient Records"
+
+        ws = wb.add_worksheet(sheet_name)
+        self._populate_adult_records_worksheet(wb, ws, records)
+        self._write_attributes_sheet(wb, "adult", tab_color='#AD1457', header_bg='#880E4F')
+
+        ws_camps = wb.add_worksheet("Camp Summary")
+        self._populate_camp_summary_worksheet(wb, ws_camps, camps)
+
+        wb.close()
+        output.seek(0)
+        return output.getvalue()
+
+    def _populate_paediatric_records_worksheet(
+        self,
+        wb,
+        ws,
+        records: List[Dict[str, Any]]
+    ) -> None:
+        """Write columns and rows for paediatric health records into given worksheet."""
         # Formats
         header_fmt = wb.add_format({
             'bold': True, 'font_name': 'Calibri', 'font_size': 10,
@@ -916,12 +999,6 @@ class RecordService:
             'border': 1, 'border_color': '#FFECB3'
         })
 
-        sheet_name = "Paediatric Records"
-        if camp:
-            c_name = re.sub(r'[:/\\?*\[\]]', '', str(camp.get("name", "School Records")))[:30].strip()
-            sheet_name = c_name or "Paediatric Records"
-
-        ws = wb.add_worksheet(sheet_name)
         ws.set_tab_color('#0288D1')
         ws.set_row(0, 42)
         ws.freeze_panes(1, 4)
@@ -1098,11 +1175,28 @@ class RecordService:
                     fmt_to_use = alert_fmt
                 ws.write_string(row_idx, c_idx, sanitize_csv_cell(val), fmt_to_use)
 
-        # Sheet 2: Form Structure & Attributes Dictionary
-        self._write_attributes_sheet(wb, "paediatric", tab_color='#0277BD', header_bg='#01579B')
 
+
+    def _populate_paediatric_summary_worksheet(
+        self,
+        wb,
+        ws_summary,
+        camp: Optional[Dict[str, Any]],
+        records: List[Dict[str, Any]]
+    ) -> None:
+        """Write paediatric camp summary metrics into given worksheet."""
+        header_fmt = wb.add_format({
+            'bold': True, 'font_name': 'Calibri', 'font_size': 10,
+            'bg_color': '#0288D1', 'font_color': '#FFFFFF',
+            'valign': 'vcenter', 'align': 'center',
+            'border': 1, 'border_color': '#81D4FA', 'text_wrap': True
+        })
+        cell_fmt = wb.add_format({
+            'font_name': 'Calibri', 'font_size': 9,
+            'valign': 'vcenter', 'border': 1, 'border_color': '#E1F5FE'
+        })
         # Sheet 3: Paediatric Camp Summary
-        ws_summary = wb.add_worksheet("Paediatric Summary")
+        # ws_summary passed in as parameter
         ws_summary.set_tab_color('#01579B')
         summary_cols = [
             ("School / Camp Name", 28),
@@ -1156,7 +1250,64 @@ class RecordService:
             else:
                 ws_summary.write_string(1, c_idx, str(val), cell_fmt)
 
+
+
+    def _generate_paediatric_excel_export(
+        self,
+        camp_id: Optional[str],
+        camp: Optional[Dict[str, Any]],
+        records: List[Dict[str, Any]],
+        only_reviewed: bool = False
+    ) -> bytes:
+        """Generate specialized Paediatric Health Screening (.xlsx) workbook for school camps."""
+        output = io.BytesIO()
+        wb = xlsxwriter.Workbook(output, {'in_memory': True, 'remove_timezone': True})
+
+        sheet_name = "Paediatric Records"
+        if camp:
+            c_name = re.sub(r'[:/\\?*\[\]]', '', str(camp.get("name", "School Records")))[:30].strip()
+            sheet_name = c_name or "Paediatric Records"
+
+        ws = wb.add_worksheet(sheet_name)
+        self._populate_paediatric_records_worksheet(wb, ws, records)
+        self._write_attributes_sheet(wb, "paediatric", tab_color='#0277BD', header_bg='#01579B')
+
+        ws_summary = wb.add_worksheet("Paediatric Summary")
+        self._populate_paediatric_summary_worksheet(wb, ws_summary, camp, records)
+
         wb.close()
         output.seek(0)
         return output.getvalue()
 
+    def _generate_multi_family_excel_export(
+        self,
+        camp_id: Optional[str],
+        camp: Optional[Dict[str, Any]],
+        records: List[Dict[str, Any]],
+        camps: List[Dict[str, Any]],
+        only_reviewed: bool = False
+    ) -> bytes:
+        """Generate multi-family Excel (.xlsx) workbook with separate sheets for Adult and Paediatric records."""
+        output = io.BytesIO()
+        wb = xlsxwriter.Workbook(output, {'in_memory': True, 'remove_timezone': True})
+
+        adult_records = [r for r in records if r.get("target_group") != "paediatric" and not r.get("is_paediatric")]
+        paed_records = [r for r in records if r.get("target_group") == "paediatric" or r.get("is_paediatric")]
+
+        # Sheet 1: Adult Health Records
+        ws_adult = wb.add_worksheet("Adult Health Records")
+        self._populate_adult_records_worksheet(wb, ws_adult, adult_records)
+        self._write_attributes_sheet(wb, "adult", tab_color='#AD1457', header_bg='#880E4F', sheet_title="Adult Form Attributes")
+
+        # Sheet 2: Paediatric Records
+        ws_paed = wb.add_worksheet("Paediatric Records")
+        self._populate_paediatric_records_worksheet(wb, ws_paed, paed_records)
+        self._write_attributes_sheet(wb, "paediatric", tab_color='#0277BD', header_bg='#01579B', sheet_title="Paediatric Form Attributes")
+
+        # Sheet 3: Camp Summary
+        ws_camps = wb.add_worksheet("Camp Summary")
+        self._populate_camp_summary_worksheet(wb, ws_camps, camps)
+
+        wb.close()
+        output.seek(0)
+        return output.getvalue()

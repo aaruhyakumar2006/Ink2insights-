@@ -11,6 +11,13 @@ backend_dir = os.path.join(PROJECT_ROOT, "backend")
 if backend_dir not in sys.path:
     sys.path.insert(0, backend_dir)
 
+# Serverless environment adaptation: Ensure default database and uploads are routed to writable /tmp
+if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+    if not os.environ.get("DATABASE_PATH") and not os.environ.get("DATABASE_URL"):
+        os.environ["DATABASE_PATH"] = "/tmp/clinic_records.db"
+    if not os.environ.get("PRIVATE_UPLOAD_DIR"):
+        os.environ["PRIVATE_UPLOAD_DIR"] = "/tmp/private_uploads"
+
 try:
     from backend.app import app
 except Exception as e:

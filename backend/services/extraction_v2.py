@@ -44,7 +44,7 @@ class ExtractionV2Pipeline:
         ai_provider: Optional[str] = None
     ):
         self.template_engine = template_engine or default_template_engine
-        self.ai_provider = ai_provider or os.getenv("AI_PROVIDER", "groq").lower()
+        self.ai_provider = ai_provider or os.getenv("AI_PROVIDER", "gemini").lower()
         self.primary_model = primary_model or os.getenv("PRIMARY_VISION_MODEL") or os.getenv("GROQ_MODEL", "llama-3.2-11b-vision-preview")
         self.fallback_model = fallback_model or os.getenv("FALLBACK_VISION_MODEL") or os.getenv("GROQ_FALLBACK_MODEL", "llama-3.2-90b-vision-preview")
         self.glossary = default_glossary_service
@@ -173,7 +173,9 @@ Return strictly a JSON object."""
             for field_def in sec.get("fields", []):
                 key = field_def["key"]
                 raw_item = raw_model_json.get(key)
-                if not isinstance(raw_item, dict):
+                if isinstance(raw_item, (list, tuple)) and len(raw_item) >= 2:
+                    raw_item = {"raw_text": str(raw_item[0] if raw_item[0] is not None else ""), "confidence": float(raw_item[1])}
+                elif not isinstance(raw_item, dict):
                     raw_item = {"raw_text": str(raw_item or ""), "confidence": 0.8}
 
                 processed = self.validate_and_normalize_field(field_def, raw_item)
@@ -186,11 +188,14 @@ Return strictly a JSON object."""
                 if processed["confidence"] < 0.60 or processed["status"] in ("unreadable", "format_warning", "implausible_vitals"):
                     uncertain_fields.append(key)
 
+        data_dict = {k: v.get("normalized_value") for k, v in normalized_fields.items()}
+
         return {
             "template_id": template_id,
             "template_version": tpl.get("version", "1.0.0"),
             "glossary_version": self.glossary.version,
             "fields": normalized_fields,
+            "data": data_dict,
             "missing_fields": missing_fields,
             "uncertain_fields": uncertain_fields,
             "needs_escalation": len(uncertain_fields) > 0
@@ -286,3 +291,11 @@ Return strictly a JSON object."""
 
 # Global Singleton
 default_extraction_pipeline = ExtractionV2Pipeline()
+
+
+def process_extracted_payload(raw_payload: Any, template_id: str = "tpl_adult_history_v9_1") -> Dict[str, Any]:
+    """Module-level helper to process raw extraction payloads using default pipeline."""
+    if isinstance(raw_payload, str):
+        t_id, payload = raw_payload, template_id
+        return default_extraction_pipeline.process_extracted_payload(t_id, payload)
+    return default_extraction_pipeline.process_extracted_payload(template_id, raw_payload)

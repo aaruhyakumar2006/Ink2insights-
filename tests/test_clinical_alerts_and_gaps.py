@@ -150,9 +150,11 @@ def test_referral_slip_pdf_endpoint(tmp_path):
     app = create_app(db_path=db_file)
     app.config["TESTING"] = True
 
-    camp = database.create_camp("Slip Camp", 30, "Today", db_path=db_file)
+    from backend.services.auth_service import create_access_token
+    camp = database.create_camp("Slip Camp", 30, "Today", community_id="comm_alerts", db_path=db_file)
     rec = database.insert_record({
         "camp_id": camp["id"],
+        "community_id": "comm_alerts",
         "person_name": "Rohan Patel",
         "age": "15",
         "gender": "Male",
@@ -174,7 +176,9 @@ def test_referral_slip_pdf_endpoint(tmp_path):
         }
     }, db_path=db_file)
 
+    token = create_access_token(user_id="doc_alerts", role="doctor", org_id="comm_alerts")
     with app.test_client() as client:
+        client.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {token}"
         res = client.get(f"/api/records/{rec['id']}/referral-slip")
         assert res.status_code == 200
         assert res.mimetype == "application/pdf"

@@ -6,8 +6,15 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0F172A"
+    },
     "ios": {
       "supportsTablet": true,
+      "bundleIdentifier": "com.ink2insight.scanner",
+      "buildNumber": "1",
       "infoPlist": {
         "NSCameraUsageDescription": "Ink 2 Insight needs camera access to scan clinical health camp forms.",
         "NSPhotoLibraryUsageDescription": "Ink 2 Insight needs photo library access to upload clinical health camp documents."
@@ -15,6 +22,7 @@
     },
     "android": {
       "package": "com.ink2insight.scanner",
+      "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#0F172A",
         "foregroundImage": "./assets/android-icon-foreground.png"
@@ -22,11 +30,18 @@
       "permissions": [
         "CAMERA",
         "READ_EXTERNAL_STORAGE",
-        "WRITE_EXTERNAL_STORAGE"
+        "WRITE_EXTERNAL_STORAGE",
+        "INTERNET",
+        "ACCESS_NETWORK_STATE"
       ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "YOUR_PROJECT_ID_WILL_BE_GENERATED"
+      }
     }
   }
 }

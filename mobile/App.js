@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   StyleSheet,
   View,
@@ -21,7 +21,28 @@ export default function App() {
   const [showConfig, setShowConfig] = useState(false);
   const [loading, setLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
+  const [statusBarHidden, setStatusBarHidden] = useState(false);
   const webViewRef = useRef(null);
+
+  useEffect(() => {
+    // Hide status bar during initial intro window fallback
+    setStatusBarHidden(true);
+    const timer = setTimeout(() => {
+      setStatusBarHidden(false);
+    }, 11000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  const handleMessage = (event) => {
+    try {
+      const data = JSON.parse(event.nativeEvent.data);
+      if (data.type === 'intro-start' || data.type === 'intro:start') {
+        setStatusBarHidden(true);
+      } else if (data.type === 'intro-end' || data.type === 'intro:end') {
+        setStatusBarHidden(false);
+      }
+    } catch (e) {}
+  };
 
   const handleReload = () => {
     setHasError(false);
@@ -43,27 +64,29 @@ export default function App() {
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="light-content" backgroundColor="#0F172A" />
+    <SafeAreaView style={[styles.safeArea, statusBarHidden && styles.safeAreaFullscreen]}>
+      <StatusBar hidden={statusBarHidden} translucent backgroundColor="transparent" barStyle="light-content" />
 
-      {/* Top Floating Control Bar */}
-      <View style={styles.topBar}>
-        <View style={styles.statusIndicator}>
-          <View style={[styles.statusDot, { backgroundColor: hasError ? '#EF4444' : '#10B981' }]} />
-          <Text style={styles.statusText} numberOfLines={1}>
-            {currentUrl}
-          </Text>
-        </View>
+      {/* Top Floating Control Bar - hidden during full-screen brand intro */}
+      {!statusBarHidden && (
+        <View style={styles.topBar}>
+          <View style={styles.statusIndicator}>
+            <View style={[styles.statusDot, { backgroundColor: hasError ? '#EF4444' : '#10B981' }]} />
+            <Text style={styles.statusText} numberOfLines={1}>
+              {currentUrl}
+            </Text>
+          </View>
 
-        <View style={styles.buttonGroup}>
-          <TouchableOpacity style={styles.iconButton} onPress={handleReload}>
-            <Text style={styles.iconButtonText}>🔄</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.configButton} onPress={() => setShowConfig(!showConfig)}>
-            <Text style={styles.configButtonText}>⚙️ IP</Text>
-          </TouchableOpacity>
+          <View style={styles.buttonGroup}>
+            <TouchableOpacity style={styles.iconButton} onPress={handleReload}>
+              <Text style={styles.iconButtonText}>🔄</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.configButton} onPress={() => setShowConfig(!showConfig)}>
+              <Text style={styles.configButtonText}>⚙️ IP</Text>
+            </TouchableOpacity>
+          </View>
         </View>
-      </View>
+      )}
 
       {/* IP Configuration Banner Modal */}
       {showConfig && (
@@ -112,6 +135,7 @@ export default function App() {
           scalesPageToFit={true}
           allowsInlineMediaPlayback={true}
           mediaPlaybackRequiresUserAction={false}
+          onMessage={handleMessage}
           allowsBackForwardNavigationGestures={true}
           allowFileAccess={true}
           allowFileAccessFromFileURLs={true}
@@ -169,6 +193,10 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#0F172A',
     paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
+  },
+  safeAreaFullscreen: {
+    paddingTop: 0,
+    backgroundColor: '#000000',
   },
   topBar: {
     height: 44,

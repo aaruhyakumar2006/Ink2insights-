@@ -1,0 +1,15 @@
+# EAS Build ignore file
+# Files/folders to exclude from EAS builds
+
+node_modules/
+.expo/
+.expo-shared/
+.vscode/
+.idea/
+*.log
+*.lock
+.DS_Store
+Thumbs.db
+BUILD_GUIDE.md
+README.md
+.git/
