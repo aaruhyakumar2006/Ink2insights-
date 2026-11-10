@@ -4768,16 +4768,6 @@ function initApp() {
   // renderHome() will be called after successful login
   initPinBoxes();
   resetSessionIdleTimer();
-  
-  // Navigate to landing page only if not already authenticated
-  const hasAuthToken = localStorage.getItem('auth_token');
-  if (!hasAuthToken && state.currentScreen !== 'landing' && state.currentScreen !== 'home') {
-    setTimeout(() => {
-      if (state.currentScreen !== 'landing' && state.currentScreen !== 'home') {
-        go('landing');
-      }
-    }, 100);
-  }
 
   // ── Phase 4: Encrypted Offline Queue + ServiceWorker ────────────────────
   (async () => {
