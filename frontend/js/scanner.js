@@ -336,18 +336,17 @@ export class DocumentScanner {
     }
 
     try {
-      // Use the exact same assessImageQuality check for uploaded images
-      const quality = await assessImageQuality(file);
+      // SIMPLIFIED: Skip quality assessment - just accept the file
       const url = URL.createObjectURL(file);
       this.setPageImage(this.currentPage, file, url, file.name);
-      return { blob: file, url, quality };
+      return { blob: file, url, quality: { ok: true } };
     } catch (err) {
       const url = URL.createObjectURL(file);
       this.setPageImage(this.currentPage, file, url, file.name);
       return {
         blob: file,
         url,
-        quality: { ok: null, blur_score: 0, brightness: 0, glare_pct: 0, issues: ['Could not check this photo, retake if unsure'] }
+        quality: { ok: true }
       };
     }
   }

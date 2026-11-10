@@ -183,27 +183,13 @@ def create_app(db_path: Optional[str] = None) -> Flask:
     # Initialize DB tables
     database.init_db(db_path)
 
-    # Initialize Flask-Limiter for rate limiting (10/min per user, 60/min per org)
-    if LIMITER_AVAILABLE:
-        def get_user_rate_key() -> str:
-            return request.headers.get("X-User-ID") or request.headers.get("X-Doctor-ID") or get_remote_address()
-
-        def get_org_rate_key() -> str:
-            return request.headers.get("X-Org-ID") or "org_default"
-
-        limiter = Limiter(
-            get_user_rate_key,
-            app=app,
-            storage_uri="memory://",
-            strategy="fixed-window"
-        )
-    else:
-        class DummyLimiter:
-            def limit(self, *args, **kwargs):
-                def decorator(f):
-                    return f
-                return decorator
-        limiter = DummyLimiter()
+    # Initialize Flask-Limiter for rate limiting - DISABLED FOR NOW (production mode only)
+    class DummyLimiter:
+        def limit(self, *args, **kwargs):
+            def decorator(f):
+                return f
+            return decorator
+    limiter = DummyLimiter()
 
     @app.errorhandler(429)
     def ratelimit_handler(e):

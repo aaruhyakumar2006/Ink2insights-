@@ -1345,11 +1345,12 @@ export async function captureCurrentPage() {
     } else {
       // Production path: camera inactive -> open take photo camera picker and show toast
       takePhotoWithCamera();
-      toast('Camera inactive. Please select or capture an image using your device camera.');
+      toast('📷 Please select or capture an image using your device camera.');
       return;
     }
   }
 
+  // SIMPLIFIED: No quality checks - proceed immediately
   const applyCapture = () => {
     state.pageBlobs[state.currentScanPage] = captured.blob;
     state.pageUrls[state.currentScanPage] = captured.url;
@@ -1362,7 +1363,7 @@ export async function captureCurrentPage() {
       sc.currentPage = 1;
       state.qualityBypassed = false;
       updateScanStepsUI();
-      toast('Page 1 captured! Now scan Page 2 (Back side)');
+      toast('✅ Page 1 captured! Now scan Page 2 (Back side)');
     } else {
       // Both pages captured -> Proceed to Pair Check
       sc.stopCamera();
@@ -1372,18 +1373,7 @@ export async function captureCurrentPage() {
     }
   };
 
-  if (captured && captured.quality && !captured.quality.ok && !state.qualityBypassed) {
-    showQualityAlertModal(
-      captured.quality,
-      () => applyCapture(),
-      () => {
-        sc.removePage(state.currentScanPage);
-        toast('Retake ready. Position camera steadily.');
-      }
-    );
-    return;
-  }
-
+  // SKIP quality checks - go straight to apply
   applyCapture();
 }
 
@@ -1405,6 +1395,7 @@ export async function onFileUploaded(event) {
     const res = await sc.handleFileUpload(file);
     console.log('✅ File processed:', { quality: res.quality, size: res.blob.size });
     
+    // SIMPLIFIED: No quality checks - proceed immediately
     const applyUpload = () => {
       state.pageBlobs[state.currentScanPage] = res.blob;
       state.pageUrls[state.currentScanPage] = res.url;
@@ -1425,19 +1416,7 @@ export async function onFileUploaded(event) {
       }
     };
 
-    if (res && res.quality && !res.quality.ok && !state.qualityBypassed) {
-      if (processing) processing.style.display = 'none';
-      showQualityAlertModal(
-        res.quality,
-        () => applyUpload(),
-        () => {
-          sc.removePage(state.currentScanPage);
-          toast('⚠️ Please choose a clearer or better-lit photo.');
-        }
-      );
-      return;
-    }
-
+    // SKIP quality checks - go straight to apply
     applyUpload();
   } catch (err) {
     console.error('❌ File upload error:', err);
