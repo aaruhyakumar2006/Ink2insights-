@@ -1561,6 +1561,11 @@ function proceedToPairsScreen() {
   const p1 = state.pageUrls[0];
   const p2 = state.pageUrls[1];
 
+  // GET THE PREVIEW ELEMENTS FIRST
+  const prev1 = $('pairs-p1-preview');
+  const prev2 = $('pairs-p2-preview');
+  const sc = getScannerInstance();
+
   if (prev1 && p1) {
     prev1.style.backgroundImage = `url('${p1}')`;
     const isHeic1 = (sc?.pages?.[0]?.name || '').toLowerCase().match(/\.(heic|heif)$/);
@@ -1587,7 +1592,6 @@ function proceedToPairsScreen() {
   }
 
   // Page 1 vs Page 2 Slot Swap Heuristic
-  const sc = getScannerInstance();
   const n0 = ((sc && sc.pages && sc.pages[0] && sc.pages[0].name) || '').toLowerCase();
   const n1 = ((sc && sc.pages && sc.pages[1] && sc.pages[1].name) || '').toLowerCase();
   const p2Keywords = ['page2', 'page_2', 'p2', 'health', 'assessment', 'exam', 'system'];
