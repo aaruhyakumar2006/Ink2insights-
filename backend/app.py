@@ -213,6 +213,7 @@ def create_app(db_path: Optional[str] = None) -> Flask:
             or path.startswith("/api/camps")
             or path.startswith("/api/records")
             or path.startswith("/api/extract")
+            or path.startswith("/api/stats")
         ):
             return None
 
