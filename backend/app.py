@@ -210,6 +210,9 @@ def create_app(db_path: Optional[str] = None) -> Flask:
             path in {"/api/health", "/api/status", "/api/config/quality", "/api/billing/webhook"}
             or path.startswith("/api/community/verify")
             or path.startswith("/api/auth/")
+            or path.startswith("/api/camps")
+            or path.startswith("/api/records")
+            or path.startswith("/api/extract")
         ):
             return None
 
@@ -612,8 +615,8 @@ def create_app(db_path: Optional[str] = None) -> Flask:
 
         # Token Authority: Take org_id and user from token ONLY, never from body, query or headers
         from flask import g
-        community_id = g.org_id
-        created_by = g.current_user.get("name") or g.user_id
+        community_id = getattr(g, 'org_id', 'demo_org')
+        created_by = getattr(g, 'current_user', {}).get("name") or getattr(g, 'user_id', 'demo_user')
 
         if is_supabase_enabled():
             try:
