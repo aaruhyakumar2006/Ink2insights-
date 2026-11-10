@@ -1389,11 +1389,22 @@ export async function captureCurrentPage() {
 
 export async function onFileUploaded(event) {
   const file = event.target.files && event.target.files[0];
-  if (!file) return;
+  if (!file) {
+    console.warn('No file selected from input');
+    return;
+  }
 
+  console.log('📸 File uploaded:', file.name, file.size, file.type);
+  
   const sc = getScannerInstance();
   try {
+    // Show loading indicator
+    const processing = $('processing');
+    if (processing) processing.style.display = 'block';
+    
     const res = await sc.handleFileUpload(file);
+    console.log('✅ File processed:', { quality: res.quality, size: res.blob.size });
+    
     const applyUpload = () => {
       state.pageBlobs[state.currentScanPage] = res.blob;
       state.pageUrls[state.currentScanPage] = res.url;
@@ -1405,20 +1416,23 @@ export async function onFileUploaded(event) {
         sc.currentPage = 1;
         state.qualityBypassed = false;
         updateScanStepsUI();
-        toast('Page 1 photo uploaded! Select Page 2 photo.');
+        toast('✅ Page 1 uploaded! Now select Page 2 photo.');
+        if (processing) processing.style.display = 'none';
       } else {
         sc.stopCamera();
+        if (processing) processing.style.display = 'none';
         proceedToPairsScreen();
       }
     };
 
     if (res && res.quality && !res.quality.ok && !state.qualityBypassed) {
+      if (processing) processing.style.display = 'none';
       showQualityAlertModal(
         res.quality,
         () => applyUpload(),
         () => {
           sc.removePage(state.currentScanPage);
-          toast('Please choose a clearer or better-lit photo.');
+          toast('⚠️ Please choose a clearer or better-lit photo.');
         }
       );
       return;
@@ -1426,7 +1440,14 @@ export async function onFileUploaded(event) {
 
     applyUpload();
   } catch (err) {
-    toast(err.message, true);
+    console.error('❌ File upload error:', err);
+    const processing = $('processing');
+    if (processing) processing.style.display = 'none';
+    toast('❌ ' + (err.message || 'Failed to process photo'), true);
+  } finally {
+    // Reset file input
+    const input = event.target;
+    if (input) input.value = '';
   }
 }
 

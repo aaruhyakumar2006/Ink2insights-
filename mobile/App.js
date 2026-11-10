@@ -141,6 +141,16 @@ export default function App() {
           allowFileAccessFromFileURLs={true}
           allowUniversalAccessFromFileURLs={true}
           originWhitelist={['*']}
+          mixedContentMode="always"
+          userAgent="Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.120 Mobile Safari/537.36"
+          cameraPermissionExpires={Date.now() + 3600000}
+          onOpenFileChooser={() => true}
+          onShouldStartLoadWithRequest={(request) => {
+            return true;
+          }}
+          geolocationEnabled={true}
+          setBuiltInZoomControls={false}
+          setDisplayZoomControls={false}
           onLoadStart={() => {
             setLoading(true);
             setHasError(false);

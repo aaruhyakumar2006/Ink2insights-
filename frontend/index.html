@@ -762,6 +762,12 @@
 
       <p class="hint" id="hnt">Fit the entire page inside the corners</p>
 
+      <!-- Processing Indicator -->
+      <div id="processing" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.8);padding:20px 30px;border-radius:12px;z-index:9999;text-align:center;color:#fff;">
+        <div style="font-size:28px;margin-bottom:10px;">⏳</div>
+        <div style="font-size:14px;font-weight:500;">Processing photo...</div>
+      </div>
+
       <!-- Shutter Controls & Live Thumbnails -->
       <div class="ctl">
         <div class="th" id="t1" title="Page 1 preview"></div>
@@ -773,8 +779,8 @@
 
       <!-- Quick Action Utilities -->
       <div class="scan-utils-bar">
-        <input type="file" id="camera-photo-input" accept="image/*" capture="environment" style="display:none;" onchange="window.app.onFileUploaded(event)">
-        <input type="file" id="camera-gallery-input" accept="image/*" style="display:none;" onchange="window.app.onFileUploaded(event)">
+        <input type="file" id="camera-photo-input" accept="image/*" capture="environment" style="display:none;" onchange="window.app.onFileUploaded(event)" multiple="false">
+        <input type="file" id="camera-gallery-input" accept="image/*" style="display:none;" onchange="window.app.onFileUploaded(event)" multiple="false">
         <button type="button" class="btn ghost" id="btn-take-photo" onclick="window.app.takePhotoWithCamera()">
           <svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
           Take Photo
