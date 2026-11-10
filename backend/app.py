@@ -806,10 +806,10 @@ def create_app(db_path: Optional[str] = None) -> Flask:
         # Ensure a single, consistent record ID across both Supabase and SQLite
         if not payload.get("id"):
             payload["id"] = f"rec_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{os.urandom(3).hex()}"
-        # Token authority: org_id and scanned_by come strictly from token
-        payload["community_id"] = g.org_id
+        # Token authority: org_id and scanned_by come strictly from token (with demo fallback)
+        payload["community_id"] = getattr(g, 'org_id', 'demo_org')
         if not payload.get("scanned_by"):
-            payload["scanned_by"] = g.user_id
+            payload["scanned_by"] = getattr(g, 'user_id', 'demo_user')
         try:
             if is_supabase_enabled():
                 try:
