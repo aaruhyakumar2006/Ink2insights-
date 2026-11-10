@@ -4769,12 +4769,15 @@ function initApp() {
   initPinBoxes();
   resetSessionIdleTimer();
   
-  // Force navigation to landing page
-  setTimeout(() => {
-    if (state.currentScreen !== 'landing') {
-      go('landing');
-    }
-  }, 100);
+  // Navigate to landing page only if not already authenticated
+  const hasAuthToken = localStorage.getItem('auth_token');
+  if (!hasAuthToken && state.currentScreen !== 'landing' && state.currentScreen !== 'home') {
+    setTimeout(() => {
+      if (state.currentScreen !== 'landing' && state.currentScreen !== 'home') {
+        go('landing');
+      }
+    }, 100);
+  }
 
   // ── Phase 4: Encrypted Offline Queue + ServiceWorker ────────────────────
   (async () => {
@@ -4852,9 +4855,14 @@ function initApp() {
   window.finishSplash = finishSplash;
   window.__docScannerFinishSplash = finishSplash;
   
-  // Ensure we're on landing page after init
-  console.log('[I2I] InitApp complete, current screen:', state.currentScreen);
-  go('landing');
+  // Navigate to landing or home based on auth status
+  const hasAuthToken = localStorage.getItem('auth_token');
+  console.log('[I2I] InitApp complete, current screen:', state.currentScreen, 'hasAuthToken:', !!hasAuthToken);
+  if (hasAuthToken) {
+    go('home');
+  } else {
+    go('landing');
+  }
 }
 
 // Boot sequence: play intro before application init
