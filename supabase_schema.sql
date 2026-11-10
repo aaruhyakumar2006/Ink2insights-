@@ -1,449 +1,453 @@
--- ==============================================================================
--- I2 insights — Supabase Cloud Database Schema v2
--- Run this in your Supabase Dashboard: SQL Editor -> New Query -> Run
--- ==============================================================================
+-- I2I Medical Records System - Supabase PostgreSQL Schema
+-- Generated for: https://wiwclaxgwxnblsltdkym.supabase.co
+-- This schema defines all tables, relationships, and indexes for the I2I system
+-- Compatible with PostgreSQL 12+
 
--- 1. Doctors / Users Profile Table
-CREATE TABLE IF NOT EXISTS public.doctors (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    auth_id UUID UNIQUE,                          -- links to auth.users.id
-    email TEXT NOT NULL UNIQUE,
-    full_name TEXT NOT NULL,
-    specialization TEXT DEFAULT 'General Physician',
-    phone TEXT,
-    avatar_url TEXT,
-    is_active BOOLEAN DEFAULT true,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
+-- Enable UUID extension
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
--- 2. Screening Health Camps Table
-CREATE TABLE IF NOT EXISTS public.camps (
+-- ============================================================================
+-- 1. COMMUNITIES TABLE (Team Workspace / Clinic Organization)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS communities (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    date_str TEXT DEFAULT 'Today',
-    location TEXT,
-    expected_records INTEGER DEFAULT 100,
-    created_by UUID REFERENCES public.doctors(id),
-    is_deleted BOOLEAN DEFAULT false,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+    code TEXT UNIQUE NOT NULL,
+    creator_name TEXT NOT NULL,
+    creator_email TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMP WITH TIME ZONE
 );
 
--- 3. Patient Intake Records Table (Strictly isolated by camp_id)
-CREATE TABLE IF NOT EXISTS public.records (
+CREATE INDEX idx_communities_code ON communities(code);
+
+-- ============================================================================
+-- 2. DOCTORS TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS doctors (
     id TEXT PRIMARY KEY,
-    camp_id TEXT NOT NULL REFERENCES public.camps(id) ON DELETE CASCADE,
+    auth_id TEXT UNIQUE,
+    email TEXT UNIQUE NOT NULL,
+    full_name TEXT NOT NULL,
+    specialization TEXT DEFAULT 'General Physician',
+    avatar_url TEXT,
+    phone TEXT,
+    community_id TEXT REFERENCES communities(id) ON DELETE SET NULL,
+    community_code TEXT,
+    community_role TEXT DEFAULT 'doctor',
+    is_active INTEGER DEFAULT 1,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_doctors_email ON doctors(email);
+CREATE INDEX idx_doctors_auth_id ON doctors(auth_id);
+CREATE INDEX idx_doctors_community ON doctors(community_id);
+
+-- ============================================================================
+-- 3. CAMPS TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS camps (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    date_str TEXT NOT NULL,
+    expected_records INTEGER NOT NULL DEFAULT 100,
+    location TEXT DEFAULT 'Chennai Health Camp',
+    created_by TEXT,
+    community_id TEXT REFERENCES communities(id) ON DELETE CASCADE,
+    target_group TEXT NOT NULL DEFAULT 'adult',
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE INDEX idx_camps_community ON camps(community_id);
+CREATE INDEX idx_camps_target_group ON camps(target_group);
+
+-- ============================================================================
+-- 4. ADULT RECORDS TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS adult_records (
+    id TEXT PRIMARY KEY,
+    camp_id TEXT NOT NULL REFERENCES camps(id) ON DELETE CASCADE,
     person_name TEXT NOT NULL,
     age TEXT,
     gender TEXT,
-    dob TEXT,
-    blood_group TEXT,
-    mobile_number TEXT,
-    address TEXT,
     height TEXT,
     weight TEXT,
     blood_pressure TEXT,
     pulse TEXT,
     rbs TEXT,
     waist_circumference TEXT,
-    known_allergies TEXT,
+    ecg_notes TEXT,
+    echo_notes TEXT,
     examination_details TEXT,
     referral_details TEXT,
-    missing_fields JSONB DEFAULT '[]'::jsonb,
-    uncertain_fields JSONB DEFAULT '[]'::jsonb,
+    marital_status TEXT,
+    parent_spouse_name TEXT,
+    no_of_children TEXT,
+    address TEXT,
+    mobile_number TEXT,
+    blood_group TEXT,
+    dob TEXT,
+    admission_id TEXT,
+    moc_doc_id TEXT,
+    school_college_name TEXT,
+    staff_student_type TEXT,
+    shift TEXT,
+    year_of_study TEXT,
+    course_dept TEXT,
+    section TEXT,
+    medical_history TEXT DEFAULT '{}',
+    family_history TEXT DEFAULT '{}',
+    vision_category TEXT,
+    distant_vision_right TEXT,
+    distant_vision_left TEXT,
+    dental_status TEXT,
+    dental_abnormality TEXT,
+    dental_advice TEXT,
+    consent_given INTEGER DEFAULT 1,
+    consent_signature TEXT,
+    status TEXT NOT NULL CHECK(status IN ('needs_review', 'reviewed', 'approved', 'failed')) DEFAULT 'needs_review',
+    missing_fields TEXT NOT NULL DEFAULT '[]',
+    uncertain_fields TEXT NOT NULL DEFAULT '[]',
     extraction_notes TEXT,
-    structured_record JSONB,
-    status TEXT DEFAULT 'needs_review',             -- 'needs_review' | 'reviewed' | 'failed'
+    structured_record TEXT,
     page1_preview TEXT,
     page2_preview TEXT,
-    scanned_by UUID REFERENCES public.doctors(id),  -- doctor who scanned
     reviewer_notes TEXT,
-    reviewed_by TEXT,                                -- doctor name who reviewed
-    reviewed_by_id UUID REFERENCES public.doctors(id),
-    reviewed_at TIMESTAMPTZ,
-    is_deleted BOOLEAN DEFAULT false,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+    reviewed_by TEXT,
+    reviewed_at TIMESTAMP WITH TIME ZONE,
+    approved_by TEXT,
+    approved_at TIMESTAMP WITH TIME ZONE,
+    scanned_by TEXT,
+    community_id TEXT,
+    edit_history TEXT DEFAULT '[]',
+    version INTEGER DEFAULT 1,
+    confidence_scores TEXT DEFAULT '{}',
+    locked_by TEXT,
+    locked_at TIMESTAMP WITH TIME ZONE,
+    original_ai_extraction TEXT,
+    quality_warning_bypassed TEXT DEFAULT '[]',
+    quality_bypassed INTEGER DEFAULT 0,
+    template_id TEXT,
+    template_version TEXT,
+    form_family TEXT DEFAULT 'adult',
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
--- 4. High Performance Indexes
-CREATE INDEX IF NOT EXISTS idx_records_camp_id ON public.records(camp_id);
-CREATE INDEX IF NOT EXISTS idx_records_status ON public.records(status);
-CREATE INDEX IF NOT EXISTS idx_records_created_at ON public.records(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_records_scanned_by ON public.records(scanned_by);
-CREATE INDEX IF NOT EXISTS idx_records_person_name ON public.records(person_name);
-CREATE INDEX IF NOT EXISTS idx_records_is_deleted ON public.records(is_deleted);
-CREATE INDEX IF NOT EXISTS idx_camps_is_deleted ON public.camps(is_deleted);
-CREATE INDEX IF NOT EXISTS idx_camps_created_by ON public.camps(created_by);
-CREATE INDEX IF NOT EXISTS idx_doctors_email ON public.doctors(email);
-CREATE INDEX IF NOT EXISTS idx_doctors_auth_id ON public.doctors(auth_id);
+CREATE INDEX idx_adult_records_camp ON adult_records(camp_id);
+CREATE INDEX idx_adult_records_status ON adult_records(status);
+CREATE INDEX idx_adult_records_community ON adult_records(community_id);
 
--- 5. Enable Row Level Security (RLS) as a Second Defense Layer
-ALTER TABLE public.doctors ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.camps ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.records ENABLE ROW LEVEL SECURITY;
-
--- Ensure tenant linkage columns exist on tables
-ALTER TABLE public.camps ADD COLUMN IF NOT EXISTS community_id TEXT;
-ALTER TABLE public.records ADD COLUMN IF NOT EXISTS community_id TEXT;
-ALTER TABLE public.records ADD COLUMN IF NOT EXISTS org_id TEXT;
-ALTER TABLE public.doctors ADD COLUMN IF NOT EXISTS community_id TEXT;
-
--- 6. Multi-Tenant Access Policies (Strictly scoped by app_metadata -> org_id)
--- Admin role is intra-org only; cross-org bypass (OR role = 'admin') is removed.
-
--- Camps RLS:
-CREATE POLICY "Tenant read camps" ON public.camps
-    FOR SELECT TO authenticated
-    USING (
-        community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id')
-    );
-
-CREATE POLICY "Tenant insert camps" ON public.camps
-    FOR INSERT TO authenticated
-    WITH CHECK (
-        community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id')
-    );
-
-CREATE POLICY "Tenant update camps" ON public.camps
-    FOR UPDATE TO authenticated
-    USING (
-        community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id')
-    )
-    WITH CHECK (
-        community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id')
-    );
-
-CREATE POLICY "Tenant delete camps" ON public.camps
-    FOR DELETE TO authenticated
-    USING (
-        community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id')
-    );
-
--- Records RLS:
-CREATE POLICY "Tenant read records" ON public.records
-    FOR SELECT TO authenticated
-    USING (
-        COALESCE(community_id, org_id) = (auth.jwt() -> 'app_metadata' ->> 'org_id')
-    );
-
-CREATE POLICY "Tenant insert records" ON public.records
-    FOR INSERT TO authenticated
-    WITH CHECK (
-        COALESCE(community_id, org_id) = (auth.jwt() -> 'app_metadata' ->> 'org_id')
-    );
-
-CREATE POLICY "Tenant update records" ON public.records
-    FOR UPDATE TO authenticated
-    USING (
-        COALESCE(community_id, org_id) = (auth.jwt() -> 'app_metadata' ->> 'org_id')
-    )
-    WITH CHECK (
-        COALESCE(community_id, org_id) = (auth.jwt() -> 'app_metadata' ->> 'org_id')
-    );
-
-CREATE POLICY "Tenant delete records" ON public.records
-    FOR DELETE TO authenticated
-    USING (
-        COALESCE(community_id, org_id) = (auth.jwt() -> 'app_metadata' ->> 'org_id')
-    );
-
--- Doctors RLS:
-CREATE POLICY "Tenant read doctors" ON public.doctors
-    FOR SELECT TO authenticated
-    USING (
-        community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id')
-    );
-
-CREATE POLICY "Tenant insert doctors" ON public.doctors
-    FOR INSERT TO authenticated
-    WITH CHECK (
-        community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id')
-    );
-
-CREATE POLICY "Tenant update doctors" ON public.doctors
-    FOR UPDATE TO authenticated
-    USING (
-        community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id')
-    )
-    WITH CHECK (
-        community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id')
-    );
-
-CREATE POLICY "Tenant delete doctors" ON public.doctors
-    FOR DELETE TO authenticated
-    USING (
-        community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id')
-    );
-
--- Communities table RLS:
-CREATE TABLE IF NOT EXISTS public.communities (
+-- ============================================================================
+-- 5. PAEDIATRIC RECORDS TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS paediatric_records (
     id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    code TEXT UNIQUE NOT NULL,
-    creator_name TEXT NOT NULL,
-    creator_email TEXT NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    expires_at TIMESTAMPTZ
+    camp_id TEXT NOT NULL REFERENCES camps(id) ON DELETE CASCADE,
+    person_name TEXT NOT NULL,
+    age TEXT,
+    gender TEXT,
+    height TEXT,
+    weight TEXT,
+    bmi TEXT,
+    bmi_centile REAL,
+    bmi_classification TEXT,
+    blood_pressure TEXT,
+    bp_percentile REAL,
+    bp_classification TEXT,
+    pulse TEXT,
+    spinal_caliper_atr REAL,
+    head_circumference TEXT,
+    muac TEXT,
+    screening_type TEXT,
+    school_name TEXT,
+    class_and_section TEXT,
+    admission_id TEXT,
+    moc_doc_id TEXT,
+    dob TEXT,
+    blood_group TEXT,
+    parent_guardian_name TEXT,
+    emergency_contact_phone TEXT,
+    address TEXT,
+    birth_history TEXT,
+    milestones TEXT,
+    immunization_status TEXT,
+    dietary_habits TEXT,
+    known_allergies TEXT,
+    vital_signs_status TEXT,
+    gait_status TEXT,
+    ears_hearing_status TEXT,
+    otoscopy_findings TEXT,
+    oral_cavity_throat TEXT,
+    lymph_nodes TEXT,
+    systemic_findings TEXT DEFAULT '{}',
+    vision_distant_right TEXT,
+    vision_distant_left TEXT,
+    color_vision TEXT,
+    squint_strabismus TEXT,
+    dental_caries TEXT,
+    malocclusion TEXT,
+    oral_hygiene TEXT,
+    examination_details TEXT,
+    referral_specialist TEXT,
+    referral_reason TEXT,
+    referral_details TEXT,
+    paediatric_alerts TEXT DEFAULT '[]',
+    consent_given INTEGER DEFAULT 1,
+    consent_signature TEXT,
+    status TEXT NOT NULL CHECK(status IN ('needs_review', 'reviewed', 'approved', 'failed')) DEFAULT 'needs_review',
+    missing_fields TEXT NOT NULL DEFAULT '[]',
+    uncertain_fields TEXT NOT NULL DEFAULT '[]',
+    extraction_notes TEXT,
+    structured_record TEXT,
+    page1_preview TEXT,
+    page2_preview TEXT,
+    reviewer_notes TEXT,
+    reviewed_by TEXT,
+    reviewed_at TIMESTAMP WITH TIME ZONE,
+    approved_by TEXT,
+    approved_at TIMESTAMP WITH TIME ZONE,
+    scanned_by TEXT,
+    community_id TEXT,
+    edit_history TEXT DEFAULT '[]',
+    version INTEGER DEFAULT 1,
+    confidence_scores TEXT DEFAULT '{}',
+    locked_by TEXT,
+    locked_at TIMESTAMP WITH TIME ZONE,
+    original_ai_extraction TEXT,
+    quality_warning_bypassed TEXT DEFAULT '[]',
+    quality_bypassed INTEGER DEFAULT 0,
+    template_id TEXT,
+    template_version TEXT,
+    form_family TEXT DEFAULT 'paediatric',
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
-ALTER TABLE public.communities ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Tenant read communities" ON public.communities
-    FOR SELECT TO authenticated
-    USING (id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+CREATE INDEX idx_paediatric_records_camp ON paediatric_records(camp_id);
+CREATE INDEX idx_paediatric_records_status ON paediatric_records(status);
+CREATE INDEX idx_paediatric_records_community ON paediatric_records(community_id);
 
-CREATE POLICY "Tenant insert communities" ON public.communities
-    FOR INSERT TO authenticated
-    WITH CHECK (id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+-- ============================================================================
+-- 6. UNIFIED RECORDS TABLE (Legacy Compatible)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS records (
+    id TEXT PRIMARY KEY,
+    camp_id TEXT NOT NULL REFERENCES camps(id) ON DELETE CASCADE,
+    person_name TEXT NOT NULL,
+    age TEXT,
+    gender TEXT,
+    height TEXT,
+    weight TEXT,
+    blood_pressure TEXT,
+    examination_details TEXT,
+    referral_details TEXT,
+    missing_fields TEXT NOT NULL DEFAULT '[]',
+    uncertain_fields TEXT NOT NULL DEFAULT '[]',
+    extraction_notes TEXT,
+    structured_record TEXT,
+    status TEXT NOT NULL CHECK(status IN ('needs_review', 'reviewed', 'approved', 'failed')),
+    page1_preview TEXT,
+    page2_preview TEXT,
+    reviewer_notes TEXT,
+    reviewed_by TEXT,
+    reviewed_at TIMESTAMP WITH TIME ZONE,
+    scanned_by TEXT,
+    community_id TEXT,
+    target_group TEXT NOT NULL DEFAULT 'adult',
+    is_paediatric INTEGER DEFAULT 0,
+    paediatric_alerts TEXT DEFAULT '[]',
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
 
-CREATE POLICY "Tenant update communities" ON public.communities
-    FOR UPDATE TO authenticated
-    USING (id = (auth.jwt() -> 'app_metadata' ->> 'org_id'))
-    WITH CHECK (id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+CREATE INDEX idx_records_camp ON records(camp_id);
+CREATE INDEX idx_records_status ON records(status);
+CREATE INDEX idx_records_community ON records(community_id);
 
-CREATE POLICY "Tenant delete communities" ON public.communities
-    FOR DELETE TO authenticated
-    USING (id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+-- ============================================================================
+-- 7. INVITES TABLE (Single-use tokenized invites)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS invites (
+    id TEXT PRIMARY KEY,
+    code TEXT UNIQUE NOT NULL,
+    community_id TEXT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    email TEXT,
+    role TEXT DEFAULT 'doctor',
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    is_revoked INTEGER DEFAULT 0,
+    created_by TEXT,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
 
--- Usage Ledger & Orgs tables RLS:
-CREATE TABLE IF NOT EXISTS public.orgs (
+CREATE INDEX idx_invites_code ON invites(code);
+CREATE INDEX idx_invites_community ON invites(community_id);
+
+-- ============================================================================
+-- 8. APP SETTINGS TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================================
+-- 9. ORGANIZATIONS TABLE (Phase 3 - Quota & Metering)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS orgs (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     plan TEXT DEFAULT 'outreach_10k',
-    papers_included INTEGER DEFAULT 10000,
-    papers_used INTEGER DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+    papers_included INTEGER NOT NULL DEFAULT 10000,
+    addon_papers INTEGER NOT NULL DEFAULT 0,
+    papers_used INTEGER NOT NULL DEFAULT 0,
+    renews_on TIMESTAMP WITH TIME ZONE,
+    rollover_papers INTEGER NOT NULL DEFAULT 0,
+    ai_paused INTEGER NOT NULL DEFAULT 0,
+    daily_cap INTEGER NOT NULL DEFAULT 2000
 );
-ALTER TABLE public.orgs ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Tenant read orgs" ON public.orgs
-    FOR SELECT TO authenticated
-    USING (id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
-
-CREATE POLICY "Tenant insert orgs" ON public.orgs
-    FOR INSERT TO authenticated
-    WITH CHECK (id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
-
-CREATE POLICY "Tenant update orgs" ON public.orgs
-    FOR UPDATE TO authenticated
-    USING (id = (auth.jwt() -> 'app_metadata' ->> 'org_id'))
-    WITH CHECK (id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
-
-CREATE POLICY "Tenant delete orgs" ON public.orgs
-    FOR DELETE TO authenticated
-    USING (id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
-
-CREATE TABLE IF NOT EXISTS public.usage_ledger (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    org_id TEXT NOT NULL REFERENCES public.orgs(id),
+-- ============================================================================
+-- 10. USAGE LEDGER TABLE (Phase 3)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS usage_ledger (
+    id SERIAL PRIMARY KEY,
+    org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
     record_id TEXT,
-    event_type TEXT NOT NULL,
-    paper_delta INTEGER NOT NULL DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    action TEXT NOT NULL,
+    model TEXT,
+    tokens_in INTEGER DEFAULT 0,
+    tokens_out INTEGER DEFAULT 0,
+    tokens_think INTEGER DEFAULT 0,
+    seconds REAL DEFAULT 0.0,
+    cost_rs REAL DEFAULT 0.0,
+    provider TEXT,
+    notes TEXT,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
-ALTER TABLE public.usage_ledger ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Tenant read usage_ledger" ON public.usage_ledger
-    FOR SELECT TO authenticated
-    USING (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+CREATE INDEX idx_usage_ledger_org ON usage_ledger(org_id);
+CREATE INDEX idx_usage_ledger_record ON usage_ledger(record_id);
+CREATE INDEX idx_usage_ledger_created ON usage_ledger(created_at);
 
-CREATE POLICY "Tenant insert usage_ledger" ON public.usage_ledger
-    FOR INSERT TO authenticated
-    WITH CHECK (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+-- ============================================================================
+-- 11. PAYMENTS TABLE (Phase 3)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS payments (
+    id SERIAL PRIMARY KEY,
+    org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    razorpay_payment_id TEXT UNIQUE,
+    papers INTEGER NOT NULL,
+    amount_rs REAL NOT NULL,
+    gst_rs REAL NOT NULL,
+    status TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
 
-CREATE POLICY "Tenant update usage_ledger" ON public.usage_ledger
-    FOR UPDATE TO authenticated
-    USING (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'))
-    WITH CHECK (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+CREATE INDEX idx_payments_org ON payments(org_id);
 
-CREATE POLICY "Tenant delete usage_ledger" ON public.usage_ledger
-    FOR DELETE TO authenticated
-    USING (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+-- ============================================================================
+-- 12. INVOICES TABLE (Phase 3)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS invoices (
+    id SERIAL PRIMARY KEY,
+    org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    number TEXT UNIQUE NOT NULL,
+    period TEXT NOT NULL,
+    amount_rs REAL NOT NULL,
+    gst_rs REAL NOT NULL,
+    status TEXT NOT NULL,
+    pdf_path TEXT,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
 
--- Files table RLS:
-CREATE TABLE IF NOT EXISTS public.files (
-    id TEXT PRIMARY KEY,
+CREATE INDEX idx_invoices_org ON invoices(org_id);
+
+-- ============================================================================
+-- 13. SCAN HASHES TABLE (Phase 3 - Deduplication)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS scan_hashes (
+    hash TEXT NOT NULL,
     org_id TEXT NOT NULL,
-    record_id TEXT,
-    file_type TEXT NOT NULL,
-    original_filename TEXT NOT NULL,
-    storage_path TEXT NOT NULL,
-    mime_type TEXT NOT NULL,
-    file_size INTEGER NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    record_id TEXT NOT NULL,
+    result_json TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (org_id, hash),
+    FOREIGN KEY (org_id) REFERENCES orgs(id) ON DELETE CASCADE
 );
-ALTER TABLE public.files ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Tenant read files" ON public.files
-    FOR SELECT TO authenticated
-    USING (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
-
-CREATE POLICY "Tenant insert files" ON public.files
-    FOR INSERT TO authenticated
-    WITH CHECK (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
-
-CREATE POLICY "Tenant update files" ON public.files
-    FOR UPDATE TO authenticated
-    USING (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'))
-    WITH CHECK (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
-
-CREATE POLICY "Tenant delete files" ON public.files
-    FOR DELETE TO authenticated
-    USING (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
-
--- 7. Supabase Storage Bucket for Scanned Page Images (Private & Authenticated)
-INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-VALUES (
-    'intake-scans',
-    'intake-scans',
-    false,  -- Private PHI bucket
-    15728640,  -- 15 MB
-    ARRAY['image/jpeg', 'image/png', 'image/webp', 'image/heic']
-)
-ON CONFLICT (id) DO UPDATE SET public = false;
-
--- Secure Storage policies for intake-scans bucket
-DROP POLICY IF EXISTS "Allow public upload intake-scans" ON storage.objects;
-DROP POLICY IF EXISTS "Allow public read intake-scans" ON storage.objects;
-DROP POLICY IF EXISTS "Allow public delete intake-scans" ON storage.objects;
-
-CREATE POLICY "Tenant upload intake-scans" ON storage.objects
-    FOR INSERT TO authenticated
-    WITH CHECK (bucket_id = 'intake-scans');
-
-CREATE POLICY "Tenant read intake-scans" ON storage.objects
-    FOR SELECT TO authenticated
-    USING (bucket_id = 'intake-scans');
-
-CREATE POLICY "Tenant delete intake-scans" ON storage.objects
-    FOR DELETE TO authenticated
-    USING (bucket_id = 'intake-scans');
-
--- 8. Missing Segregated Intake & Audit Tables
-CREATE TABLE IF NOT EXISTS public.adult_records (
-    id TEXT PRIMARY KEY REFERENCES public.records(id) ON DELETE CASCADE,
-    camp_id TEXT NOT NULL REFERENCES public.camps(id) ON DELETE CASCADE,
-    community_id TEXT,
-    person_name TEXT NOT NULL,
-    age TEXT,
-    gender TEXT,
-    blood_pressure TEXT,
-    height TEXT,
-    weight TEXT,
-    examination_details TEXT,
-    referral_details TEXT,
-    missing_fields JSONB DEFAULT '[]'::jsonb,
-    uncertain_fields JSONB DEFAULT '[]'::jsonb,
-    structured_record JSONB,
-    status TEXT DEFAULT 'needs_review',
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+-- ============================================================================
+-- 14. AUTH LOCKOUTS TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS auth_lockouts (
+    account_key TEXT PRIMARY KEY,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    locked_until TIMESTAMP WITH TIME ZONE,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
-ALTER TABLE public.adult_records ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Tenant adult_records access" ON public.adult_records
-    FOR ALL TO authenticated
-    USING (community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'))
-    WITH CHECK (community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
 
-CREATE TABLE IF NOT EXISTS public.paediatric_records (
-    id TEXT PRIMARY KEY REFERENCES public.records(id) ON DELETE CASCADE,
-    camp_id TEXT NOT NULL REFERENCES public.camps(id) ON DELETE CASCADE,
-    community_id TEXT,
-    person_name TEXT NOT NULL,
-    age TEXT,
-    gender TEXT,
-    blood_pressure TEXT,
-    height TEXT,
-    weight TEXT,
-    paediatric_alerts JSONB DEFAULT '[]'::jsonb,
-    examination_details TEXT,
-    referral_details TEXT,
-    missing_fields JSONB DEFAULT '[]'::jsonb,
-    uncertain_fields JSONB DEFAULT '[]'::jsonb,
-    structured_record JSONB,
-    status TEXT DEFAULT 'needs_review',
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+-- ============================================================================
+-- 15. AUTH OTPs TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS auth_otps (
+    recipient TEXT PRIMARY KEY,
+    otp_code TEXT DEFAULT 'HASHED',
+    otp_hash TEXT NOT NULL,
+    salt TEXT NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
-ALTER TABLE public.paediatric_records ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Tenant paediatric_records access" ON public.paediatric_records
-    FOR ALL TO authenticated
-    USING (community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'))
-    WITH CHECK (community_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
 
-CREATE TABLE IF NOT EXISTS public.record_audit_log (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+CREATE INDEX idx_auth_otps_expires ON auth_otps(expires_at);
+
+-- ============================================================================
+-- 16. RECORD AUDIT LOG TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS record_audit_log (
+    id TEXT PRIMARY KEY,
     record_id TEXT NOT NULL,
     org_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
     user_role TEXT NOT NULL,
     action TEXT NOT NULL,
-    changes JSONB,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    field_name TEXT,
+    old_value TEXT,
+    new_value TEXT,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
-ALTER TABLE public.record_audit_log ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Tenant audit log access" ON public.record_audit_log
-    FOR ALL TO authenticated
-    USING (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'))
-    WITH CHECK (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
 
-CREATE TABLE IF NOT EXISTS public.payments (
+CREATE INDEX idx_audit_record ON record_audit_log(record_id);
+CREATE INDEX idx_audit_org ON record_audit_log(org_id);
+CREATE INDEX idx_audit_created ON record_audit_log(created_at);
+
+-- ============================================================================
+-- 17. FILES TABLE (Cloud Storage Metadata)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS files (
     id TEXT PRIMARY KEY,
-    org_id TEXT NOT NULL REFERENCES public.orgs(id),
-    amount_rs NUMERIC(10, 2) NOT NULL,
-    gst_rs NUMERIC(10, 2) NOT NULL,
-    papers_credited INTEGER NOT NULL,
-    status TEXT DEFAULT 'completed',
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    record_id TEXT,
+    file_type TEXT NOT NULL,
+    original_filename TEXT,
+    storage_path TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    file_size INTEGER NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
-ALTER TABLE public.payments ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Tenant payments access" ON public.payments
-    FOR ALL TO authenticated
-    USING (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'))
-    WITH CHECK (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
 
-CREATE TABLE IF NOT EXISTS public.invoices (
-    id TEXT PRIMARY KEY,
-    number TEXT UNIQUE NOT NULL,
-    org_id TEXT NOT NULL REFERENCES public.orgs(id),
-    amount_rs NUMERIC(10, 2) NOT NULL,
-    pdf_path TEXT,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-ALTER TABLE public.invoices ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Tenant invoices access" ON public.invoices
-    FOR ALL TO authenticated
-    USING (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'))
-    WITH CHECK (org_id = (auth.jwt() -> 'app_metadata' ->> 'org_id'));
+CREATE INDEX idx_files_org ON files(org_id);
+CREATE INDEX idx_files_record ON files(record_id);
 
--- 9. Enable Realtime Publications for Multi-Doctor Live Sync
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
-    ALTER PUBLICATION supabase_realtime ADD TABLE public.camps, public.records, public.doctors;
-  END IF;
-EXCEPTION
-  WHEN duplicate_object THEN NULL;
-END $$;
-
--- 10. Auto-update updated_at timestamp
-CREATE OR REPLACE FUNCTION public.update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.updated_at = NOW();
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER update_doctors_updated_at BEFORE UPDATE ON public.doctors
-    FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
-CREATE TRIGGER update_camps_updated_at BEFORE UPDATE ON public.camps
-    FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
-CREATE TRIGGER update_records_updated_at BEFORE UPDATE ON public.records
-    FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
-CREATE TRIGGER update_adult_records_updated_at BEFORE UPDATE ON public.adult_records
-    FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
-CREATE TRIGGER update_paediatric_records_updated_at BEFORE UPDATE ON public.paediatric_records
-    FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+-- ============================================================================
+-- DONE - Schema successfully created
+-- ============================================================================
+-- Next Steps:
+-- 1. Run this SQL in Supabase SQL Editor
+-- 2. Update backend/.env with new Supabase URL and keys
+-- 3. Test connection: python backend/app.py
+-- 4. Verify all tables appear in Supabase UI
+-- 5. Configure Row Level Security (RLS) policies if needed
