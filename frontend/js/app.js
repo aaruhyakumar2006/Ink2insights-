@@ -1164,27 +1164,34 @@ export function showQualityAlertModal(quality, onProceed, onRetake) {
   const lumEl = $('quality-metric-lum');
   const sharpEl = $('quality-metric-sharp');
   const torchBtn = $('quality-torch-btn');
+  const metricsPill = $('quality-metrics-pill');
 
+  const reason = quality.reason || (quality.issues && quality.issues.length ? quality.issues[0] : null);
   if (msgEl) {
-    if (quality.ok === null) {
-      msgEl.textContent = 'Warning: Could not check this photo clarity. Retake if unsure.';
+    if (reason) {
+      msgEl.textContent = reason;
+    } else if (quality.ok === null) {
+      msgEl.textContent = 'We could not check this photo. Retake if you are unsure.';
     } else {
-      const issues = quality.issues && quality.issues.length ? quality.issues.join(' and ') : 'Low clarity detected';
-      msgEl.textContent = `Warning: ${issues}. Text or vitals on the paper document may be unreadable for Vision AI.`;
+      msgEl.textContent = 'The photo is blurry. Hold the phone still and tap to focus.';
     }
   }
-  if (lumEl) lumEl.textContent = (quality.brightness !== undefined ? `${quality.brightness}` : (quality.avgLum !== undefined ? `${quality.avgLum}` : 'N/A')) + ' / 255';
-  if (sharpEl) sharpEl.textContent = quality.blur_score !== undefined ? `${quality.blur_score}` : (quality.blurScore !== undefined ? `${quality.blurScore}` : 'N/A');
+
+  const isDebug = typeof window !== 'undefined' && (new URLSearchParams(window.location.search).get('debug') === '1');
+  if (metricsPill) {
+    metricsPill.style.display = isDebug ? 'block' : 'none';
+  }
+  if (lumEl) lumEl.textContent = (quality.brightness !== undefined ? `${quality.brightness}` : (quality.avgLum !== undefined ? `${quality.avgLum}` : '--')) + ' / 255';
+  if (sharpEl) sharpEl.textContent = quality.blur_score !== undefined ? `${quality.blur_score}` : (quality.blurScore !== undefined ? `${quality.blurScore}` : '--');
 
   // Show on-screen debug scores if ?debug=1
-  const isDebug = typeof window !== 'undefined' && (new URLSearchParams(window.location.search).get('debug') === '1');
   const debugScoresEl = $('quality-debug-scores');
   if (debugScoresEl) {
     if (isDebug) {
       const cP1 = state.clientPageQualities?.[0]?.blur_score ?? 'N/A';
       const cP2 = state.clientPageQualities?.[1]?.blur_score ?? 'N/A';
       const sScore = quality.blur_score ?? quality.blurScore ?? 'N/A';
-      debugScoresEl.textContent = `🔍 [DEBUG ?debug=1] Client P1: ${cP1} | P2: ${cP2} ── Current Evaluated: ${sScore}`;
+      debugScoresEl.textContent = `🔍 [DEBUG ?debug=1] Reason: ${reason || 'N/A'} | Client P1: ${cP1} | P2: ${cP2} ── Current: ${sScore}`;
       debugScoresEl.style.display = 'block';
     } else {
       debugScoresEl.style.display = 'none';
@@ -1223,9 +1230,10 @@ export function bypassQualityAlert() {
   const modal = $('modal-quality-alert');
   if (modal) modal.style.display = 'none';
   state.qualityBypassed = true;
-  if (state.lastQuality && state.lastQuality.issues && state.lastQuality.issues.length > 0) {
+  const reason = state.lastQuality?.reason || (state.lastQuality?.issues && state.lastQuality.issues[0]);
+  if (reason) {
     const pageNum = state.currentScanPage + 1;
-    state.qualityWarningsBypassed.push(`Page ${pageNum}: ${state.lastQuality.issues.join(', ')}`);
+    state.qualityWarningsBypassed.push(`Page ${pageNum}: ${reason}`);
   }
   if (window._proceedQualityCallback) {
     const cb = window._proceedQualityCallback;
@@ -1350,7 +1358,11 @@ export async function captureCurrentPage() {
     }
   }
 
-  // SIMPLIFIED: No quality checks - proceed immediately
+  if (!captured || !captured.blob) {
+    toast('Capture failed. Please try again.', true);
+    return;
+  }
+
   const applyCapture = () => {
     state.pageBlobs[state.currentScanPage] = captured.blob;
     state.pageUrls[state.currentScanPage] = captured.url;
@@ -1363,18 +1375,33 @@ export async function captureCurrentPage() {
       sc.currentPage = 1;
       state.qualityBypassed = false;
       updateScanStepsUI();
-      toast('✅ Page 1 captured! Now scan Page 2 (Back side)');
+      toast('Good photo! Now scan Page 2 (Back side)');
     } else {
       // Both pages captured -> Proceed to Pair Check
       sc.stopCamera();
       const video = $('camera-video');
       if (video) video.style.display = 'none';
+      toast('Good photo! All pages captured.');
       proceedToPairsScreen();
     }
   };
 
-  // SKIP quality checks - go straight to apply
-  applyCapture();
+  const quality = captured.quality || (await sc.checkImageQuality(captured.blob));
+  if (quality.ok === true) {
+    applyCapture();
+  } else {
+    showQualityAlertModal(
+      quality,
+      () => {
+        applyCapture();
+      },
+      () => {
+        sc.removePage(state.currentScanPage);
+        updateScanStepsUI();
+        toast('Ready to retake photo');
+      }
+    );
+  }
 }
 
 export async function onFileUploaded(event) {
@@ -1387,15 +1414,14 @@ export async function onFileUploaded(event) {
   console.log('📸 File uploaded:', file.name, file.size, file.type);
   
   const sc = getScannerInstance();
+  const processing = $('processing');
+  if (processing) processing.style.display = 'block';
+
   try {
-    // Show loading indicator
-    const processing = $('processing');
-    if (processing) processing.style.display = 'block';
-    
     const res = await sc.handleFileUpload(file);
+    if (processing) processing.style.display = 'none';
     console.log('✅ File processed:', { quality: res.quality, size: res.blob.size });
     
-    // SIMPLIFIED: No quality checks - proceed immediately
     const applyUpload = () => {
       state.pageBlobs[state.currentScanPage] = res.blob;
       state.pageUrls[state.currentScanPage] = res.url;
@@ -1407,20 +1433,32 @@ export async function onFileUploaded(event) {
         sc.currentPage = 1;
         state.qualityBypassed = false;
         updateScanStepsUI();
-        toast('✅ Page 1 uploaded! Now select Page 2 photo.');
-        if (processing) processing.style.display = 'none';
+        toast('Good photo! Now select Page 2 photo.');
       } else {
         sc.stopCamera();
-        if (processing) processing.style.display = 'none';
+        toast('Good photo! All pages ready.');
         proceedToPairsScreen();
       }
     };
 
-    // SKIP quality checks - go straight to apply
-    applyUpload();
+    const quality = res.quality || (await sc.checkImageQuality(res.blob));
+    if (quality.ok === true) {
+      applyUpload();
+    } else {
+      showQualityAlertModal(
+        quality,
+        () => {
+          applyUpload();
+        },
+        () => {
+          sc.removePage(state.currentScanPage);
+          updateScanStepsUI();
+          takePhotoWithCamera();
+        }
+      );
+    }
   } catch (err) {
     console.error('❌ File upload error:', err);
-    const processing = $('processing');
     if (processing) processing.style.display = 'none';
     toast('❌ ' + (err.message || 'Failed to process photo'), true);
   } finally {

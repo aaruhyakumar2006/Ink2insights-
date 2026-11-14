@@ -251,7 +251,8 @@ export const api = {
   async extractPages(page1Blob, page2Blob, campId = null, qualityBypassed = false, templateIds = null) {
     // ── Offline path: encrypt + enqueue ────────────────────────────────────
     if (!navigator.onLine) {
-      const apiHeaders = {};
+      const uploadId = `upl_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+      const apiHeaders = { 'X-Upload-ID': uploadId };
       const customKey = localStorage.getItem('i2i_ai_api_key');
       if (customKey) apiHeaders['X-AI-API-Key'] = customKey.trim();
       const customProvider = localStorage.getItem('i2i_ai_provider');
@@ -260,14 +261,28 @@ export const api = {
       if (customModel) apiHeaders['X-AI-Model'] = customModel.trim();
       if (qualityBypassed) apiHeaders['X-Quality-Bypassed'] = '1';
 
-      const id = await offlineQueue.enqueue(page1Blob, page2Blob, { campId, apiHeaders, templateIds });
+      // Compress images before offline queueing
+      let p1Compressed = page1Blob;
+      let p2Compressed = page2Blob;
+      try {
+        const { compressImageBlob } = await import('./scanner.js');
+        [p1Compressed, p2Compressed] = await Promise.all([
+          compressImageBlob(page1Blob, 1568, 0.8),
+          compressImageBlob(page2Blob, 1568, 0.8)
+        ]);
+      } catch (e) {
+        console.warn('Pre-queue compression fallback:', e);
+      }
+
+      const id = await offlineQueue.enqueue(p1Compressed, p2Compressed, { campId, uploadId, apiHeaders, templateIds });
       const queueLength = await offlineQueue.length();
       // Return a sentinel so callers can distinguish queued from real response
       return {
         _offline_queued: true,
         queue_id: id,
+        upload_id: uploadId,
         queue_length: queueLength,
-        message: `📵 No network — scan saved to encrypted offline queue (#${id}). Will sync automatically when connectivity is restored.`,
+        message: `📵 No network — scan saved to encrypted offline queue (#${id}). Will sync automatically once connected.`,
       };
     }
 

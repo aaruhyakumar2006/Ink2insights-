@@ -569,12 +569,18 @@ def create_app(db_path: Optional[str] = None) -> Flask:
 
     @app.route("/api/config/quality", methods=["GET"])
     def get_quality_config_route():
-        from backend.services.quality_service import get_quality_config
+        try:
+            from backend.services.quality_service import get_quality_config
+        except ImportError:
+            from services.quality_service import get_quality_config
         return jsonify(get_quality_config())
 
     @app.route("/api/quality-check", methods=["POST"])
     def quality_check_route():
-        from backend.services.quality_service import assess_image_quality
+        try:
+            from backend.services.quality_service import assess_image_quality
+        except ImportError:
+            from services.quality_service import assess_image_quality
         file = request.files.get("image") or request.files.get("file")
         if file:
             res = assess_image_quality(file.read())
@@ -1890,16 +1896,39 @@ def create_app(db_path: Optional[str] = None) -> Flask:
         except Exception as ai_pause_check_error:
             logger.warning("Failed to check AI pause status for org %s: %s", org_id, ai_pause_check_error)
 
-        # Task 2: Server-side Quality Pre-flight Check
-        from backend.services.quality_service import assess_image_quality
+        # Task 2: Server-side Quality Pre-flight Check (Final Authority)
+        try:
+            from backend.services.quality_service import assess_image_quality, clean_and_enhance_image
+        except ImportError:
+            from services.quality_service import assess_image_quality, clean_and_enhance_image
+
         q1 = assess_image_quality(sf_bytes)
         q2 = assess_image_quality(ha_bytes)
-        quality_ok = bool((q1.get("ok") is not False) and (q2.get("ok") is not False))
+        # Quality check only blocks when a check definitely fails (ok is False).
+        # Uncheckable photos (ok is None) surface a soft warning without blocking the extract workflow.
+        q1_failed = (q1.get("ok") is False)
+        q2_failed = (q2.get("ok") is False)
+        quality_ok = not (q1_failed or q2_failed)
+
         combined_issues = []
-        if q1.get("ok") is False and q1.get("issues"):
-            combined_issues.extend([f"Page 1: {iss}" for iss in q1["issues"]])
-        if q2.get("ok") is False and q2.get("issues"):
-            combined_issues.extend([f"Page 2: {iss}" for iss in q2["issues"]])
+        primary_reason = None
+        if q1_failed and q1.get("reason"):
+            primary_reason = f"Page 1: {q1['reason']}"
+            combined_issues.append(primary_reason)
+        elif q1.get("ok") is None and (q1.get("reason") or q1.get("issues")):
+            w1 = q1.get("reason") or (q1.get("issues")[0] if q1.get("issues") else "Check could not run")
+            combined_issues.append(f"Page 1: {w1}")
+
+        if q2_failed and q2.get("reason"):
+            if not primary_reason:
+                primary_reason = f"Page 2: {q2['reason']}"
+            combined_issues.append(f"Page 2: {q2['reason']}")
+        elif q2.get("ok") is None and (q2.get("reason") or q2.get("issues")):
+            w2 = q2.get("reason") or (q2.get("issues")[0] if q2.get("issues") else "Check could not run")
+            combined_issues.append(f"Page 2: {w2}")
+
+        if not quality_ok and not primary_reason:
+            primary_reason = "Image quality check failed. Please retake the photo."
 
         quality_bypassed = (
             request.headers.get("X-Quality-Bypassed", "").strip().lower() in ("1", "true")
@@ -1914,6 +1943,7 @@ def create_app(db_path: Optional[str] = None) -> Flask:
             "brightness": round((q1.get("brightness", 0) + q2.get("brightness", 0)) / 2.0, 2),
             "glare_pct": max(q1.get("glare_pct", 0), q2.get("glare_pct", 0)),
             "ok": quality_ok,
+            "reason": primary_reason,
             "issues": combined_issues
         }
 
@@ -1926,17 +1956,31 @@ def create_app(db_path: Optional[str] = None) -> Flask:
             return jsonify({
                 "success": False,
                 "error": "unreadable",
-                "message": f"Image quality check failed. Please retake the photo. Issues: {', '.join(combined_issues)}",
+                "reason": primary_reason,
+                "message": f"Image quality check failed. Please retake the photo. Issue: {primary_reason}",
                 "quality": quality_summary,
                 "code": "IMAGE_UNREADABLE"
             }), 422
+
+        # Step G: Straighten and enhance with OpenCV before sending to AI
+        try:
+            sf_ai_bytes = clean_and_enhance_image(sf_bytes, q1.get("corners"))
+        except Exception as e_clean1:
+            logger.warning("Step G student_form enhancement failed: %s; falling back to original bytes", e_clean1)
+            sf_ai_bytes = sf_bytes
+
+        try:
+            ha_ai_bytes = clean_and_enhance_image(ha_bytes, q2.get("corners"))
+        except Exception as e_clean2:
+            logger.warning("Step G health_assessment enhancement failed: %s; falling back to original bytes", e_clean2)
+            ha_ai_bytes = ha_bytes
 
         template_ids_raw = request.form.get("template_ids") or request.args.get("template_ids")
         template_ids_list = [t.strip() for t in template_ids_raw.split(",") if t.strip()] if template_ids_raw else None
 
         result = ai_extract(
-            student_form_bytes=sf_bytes,
-            health_assessment_bytes=ha_bytes,
+            student_form_bytes=sf_ai_bytes,
+            health_assessment_bytes=ha_ai_bytes,
             camp_id=camp_id,
             record_id=record_id,
             org_id=org_id,
@@ -1953,6 +1997,20 @@ def create_app(db_path: Optional[str] = None) -> Flask:
         if isinstance(result.get("data"), dict):
             result["data"]["quality"] = quality_summary
             result["data"]["quality_bypassed"] = quality_bypassed
+            result["data"]["quality_warning_bypassed"] = combined_issues if quality_bypassed else []
+
+        if record_id and quality_bypassed:
+            try:
+                database.update_record(
+                    record_id=record_id,
+                    update_data={
+                        "quality_bypassed": 1,
+                        "quality_warning_bypassed": combined_issues
+                    },
+                    db_path=db_path
+                )
+            except Exception as update_err:
+                logger.warning("Failed to record quality_bypassed on record %s: %s", record_id, update_err)
 
         # Inject permanent URLs so client saves durable image links in database
         result["page1_url"] = page1_permanent_url

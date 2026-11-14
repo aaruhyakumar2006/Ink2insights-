@@ -287,6 +287,7 @@ export class OfflineQueue {
       encryptBlob(key, page2Blob),
       encryptJson(key, {
         campId: meta.campId || null,
+        uploadId: meta.uploadId || null,
         apiHeaders: meta.apiHeaders || {},
         page1Mime: page1Blob.type || 'image/jpeg',
         page2Mime: page2Blob.type || 'image/jpeg',
@@ -296,6 +297,7 @@ export class OfflineQueue {
     const record = {
       created_at: Date.now(),
       camp_id: meta.campId || null,  // unencrypted for index only — no PHI
+      upload_id: meta.uploadId || null,
       enc_page1: encPage1,
       enc_page2: encPage2,
       enc_meta: encMeta,

@@ -44,12 +44,24 @@ def _create_dark_image(width=600, height=800, brightness=30):
 
 
 def _create_glare_image(width=600, height=800):
-    """Generate an image with a severe white specular glare blowout (> 15% clipped at 255)."""
-    img = Image.new("RGB", (width, height), color=(140, 140, 140))
+    """Generate an image with a large bright page and a severe specular glare blowout.
+
+    The page fills most of the frame (dark border) so corner detection finds it and
+    coverage passes.  A large near-white area on the page then triggers the glare check.
+    """
+    # Dark background (simulates a table or floor behind the page)
+    img = Image.new("RGB", (width, height), color=(40, 40, 40))
     draw = ImageDraw.Draw(img)
-    glare_w = int(width * 0.5)
-    glare_h = int(height * 0.5)
-    draw.rectangle([100, 100, 100 + glare_w, 100 + glare_h], fill=(255, 255, 255))
+    # Large white page area – fills ~90 % of the frame so coverage >> 60 %
+    margin = 20
+    draw.rectangle([margin, margin, width - margin, height - margin], fill=(230, 230, 230))
+    # Glare hotspot – pure white, covering ~30 % of the page area, saturated pixel count
+    # well above QUALITY_GLARE_MAX=12 %.  Placed inside the page area so it is included
+    # in the warped-page measurement.
+    gx1, gy1 = margin + 20, margin + 20
+    gx2 = gx1 + int((width - 2 * margin) * 0.55)
+    gy2 = gy1 + int((height - 2 * margin) * 0.55)
+    draw.rectangle([gx1, gy1, gx2, gy2], fill=(255, 255, 255))
     return img
 
 
@@ -87,7 +99,8 @@ def test_assess_image_quality_blurred():
     blurred_img = sharp_img.filter(ImageFilter.GaussianBlur(radius=6))
     res = assess_image_quality(_image_to_bytes(blurred_img))
     assert res["ok"] is False
-    assert any("Blurry" in issue for issue in res["issues"])
+    # The spec message contains "blurry" (lowercase); check case-insensitively
+    assert any("blurry" in issue.lower() for issue in res["issues"])
     assert res["blur_score"] < 200.0
 
 
